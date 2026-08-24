@@ -7,6 +7,7 @@
     "build": "pnpm --filter @ba-agent/console build",
     "dev": "pnpm --filter @ba-agent/console dev",
     "lint": "pnpm --filter @ba-agent/console lint",
+    "licenses:generate": "node scripts/generate-third-party-licenses.mjs",
     "test": "pnpm --filter @ba-agent/console test",
     "test:e2e": "pnpm --filter @ba-agent/console test:e2e",
     "typecheck": "pnpm --filter @ba-agent/console typecheck",

@@ -59,4 +59,9 @@ Status: **complete locally (2026-08-24)**.
 
 Windows x64, Linux x64, macOS x64/arm64 archives; checksums; install/upgrade/rollback; third-party license inventory; reproducible docs; WCAG 2.2 AA and release quality gates. Remote publication remains separately approved.
 
-Status: **pending**. No remote repository or release has been created.
+Status: **local release engineering in progress**. No remote repository or release has been created.
+
+- A manual-only candidate workflow targets Windows x64, Linux x64, macOS Intel, and macOS arm64 and uploads Actions artifacts without publishing a Release.
+- Platform packaging emits a portable archive plus SHA-256; install scripts exercise install, upgrade, rollback, uninstall, and explicit runtime-data retention.
+- A deterministic generator inventories the four release targets' union of 273 non-workspace Rust packages and 63 embedded-console runtime packages from locked dependency metadata. License-expression and notice-text review remains required before Public Beta.
+- The Windows lifecycle test passes locally. All four hosted-runner jobs, clean-machine startup, console WCAG 2.2 AA, and public-release authorization remain open.

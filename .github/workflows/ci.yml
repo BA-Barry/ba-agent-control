@@ -45,6 +45,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm licenses:generate
+      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md
       - run: pnpm validate
       - run: pnpm build

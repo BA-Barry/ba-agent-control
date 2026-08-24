@@ -1,0 +1,104 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version label used in local candidate archives
+        required: true
+        default: 0.1.0-alpha.1
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            label: windows-x64
+            binary: target/x86_64-pc-windows-msvc/release/ba-agent-control.exe
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            label: linux-x64
+            binary: target/x86_64-unknown-linux-gnu/release/ba-agent-control
+          - os: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            label: macos-x64
+            binary: target/x86_64-apple-darwin/release/ba-agent-control
+          - os: macos-15
+            rust_target: aarch64-apple-darwin
+            label: macos-arm64
+            binary: target/aarch64-apple-darwin/release/ba-agent-control
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.rust_target }}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm validate
+      - run: pnpm build
+      - run: pnpm licenses:generate
+      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md
+      - run: cargo clippy --workspace --all-targets --target ${{ matrix.rust_target }} -- -D warnings
+      - run: cargo test --workspace --locked --target ${{ matrix.rust_target }}
+      - run: cargo build --release --locked --target ${{ matrix.rust_target }} -p ba-agent-control
+      - name: Package Windows candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          ./scripts/package-release.ps1
+          -Target '${{ matrix.label }}'
+          -Binary '${{ matrix.binary }}'
+          -OutputDirectory dist/release
+          -Version '${{ inputs.version }}'
+      - name: Package Unix candidate
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./scripts/package-release.sh '${{ matrix.label }}' '${{ matrix.binary }}' dist/release '${{ inputs.version }}'
+      - name: Verify Windows install lifecycle and data retention
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem dist/release/*.zip | Select-Object -First 1
+          $install = Join-Path $env:RUNNER_TEMP 'ba-agent-install-test'
+          $data = Join-Path $env:RUNNER_TEMP 'ba-agent-data-test'
+          ./scripts/install.ps1 -Archive $archive.FullName -InstallDirectory $install
+          & (Join-Path $install 'ba-agent-control.exe') --data-dir $data --json doctor | Out-Null
+          ./scripts/install.ps1 -Archive $archive.FullName -InstallDirectory $install
+          ./scripts/install.ps1 -InstallDirectory $install -Rollback
+          ./scripts/install.ps1 -InstallDirectory $install -Uninstall
+          if (!(Test-Path -LiteralPath (Join-Path $data 'ba-agent.db'))) { throw 'runtime data was not retained' }
+      - name: Verify Unix install lifecycle and data retention
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          archive=$(find dist/release -name '*.tar.gz' -type f | head -n 1)
+          install="$RUNNER_TEMP/ba-agent-install-test"
+          data="$RUNNER_TEMP/ba-agent-data-test"
+          sh scripts/install.sh install "$archive" "$install"
+          "$install/ba-agent-control" --data-dir "$data" --json doctor >/dev/null
+          sh scripts/install.sh install "$archive" "$install"
+          sh scripts/install.sh rollback "$install"
+          sh scripts/install.sh uninstall "$install"
+          test -f "$data/ba-agent.db"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ba-agent-control-${{ matrix.label }}
+          path: dist/release/*
+          if-no-files-found: error
