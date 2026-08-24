@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Define"
+  short_description: "Turn a product request into a bounded BA Agent requirement."
+  default_prompt: "Use $ba-define to define this request as an actionable BA Agent work item."

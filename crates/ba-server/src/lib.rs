@@ -1,0 +1,1566 @@
+//! Loopback-only HTTP, SSE, and embedded-console server for BA Agent.
+
+use std::{
+    collections::{BTreeSet, HashMap},
+    convert::Infallible,
+    fs,
+    io::Write,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::{Path as FsPath, PathBuf},
+    process::Command as ProcessCommand,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
+
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{HeaderValue, Method, Request, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Redirect, Response, Sse, sse::Event},
+    routing::{get, post},
+};
+use ba_core::{EntityId, Project, RunEvent, Task, TaskStatus, Workstream, now};
+use ba_git::RepoPath;
+use ba_github::{GitHubAdapter, GitHubError};
+use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, RuntimeAdapter};
+use ba_scheduler::{
+    ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
+    RecoveryAction, RecoveryCoordinator, RuntimeCoordinator, configured_gate,
+    ensure_builtin_agent_profiles,
+};
+use ba_store::{SqliteStore, StoreError};
+use futures_util::Stream;
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::{net::TcpListener, sync::broadcast};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
+
+pub const API_PREFIX: &str = "/api/v1";
+pub const LOOPBACK_HOST: &str = "127.0.0.1";
+
+include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
+
+#[derive(Clone, Debug)]
+pub struct ServerConfig {
+    pub port: u16,
+    pub database_path: PathBuf,
+    pub worktree_root: PathBuf,
+    pub codex_binary: PathBuf,
+    pub control_descriptor_path: PathBuf,
+}
+
+impl ServerConfig {
+    #[must_use]
+    pub fn new(database_path: PathBuf) -> Self {
+        let worktree_root = database_path.parent().map_or_else(
+            || PathBuf::from("worktrees"),
+            |parent| parent.join("worktrees"),
+        );
+        let control_descriptor_path = database_path.parent().map_or_else(
+            || PathBuf::from("control.json"),
+            |parent| parent.join("control.json"),
+        );
+        Self {
+            port: 0,
+            database_path,
+            worktree_root,
+            codex_binary: PathBuf::from("codex"),
+            control_descriptor_path,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlDescriptor {
+    pub address: SocketAddr,
+    pub origin: String,
+    pub session_token: String,
+    pub csrf_token: String,
+    pub process_id: u32,
+    pub started_at: String,
+}
+
+impl std::fmt::Debug for ControlDescriptor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControlDescriptor")
+            .field("address", &self.address)
+            .field("origin", &self.origin)
+            .field("session_token", &"<redacted>")
+            .field("csrf_token", &"<redacted>")
+            .field("process_id", &self.process_id)
+            .field("started_at", &self.started_at)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ServerHandle {
+    pub address: SocketAddr,
+    pub launch_url: String,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+impl ServerHandle {
+    /// Stop the loopback server and wait for graceful shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the server task fails or cannot be joined.
+    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+        if let Some(sender) = self.shutdown.take() {
+            let _ignored = sender.send(());
+        }
+        self.task.await??;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AppState {
+    store: SqliteStore,
+    security: Arc<SessionSecurity>,
+    events: broadcast::Sender<RunEvent>,
+    worktree_root: PathBuf,
+    control: RuntimeCoordinator,
+    github: GitHubAdapter,
+}
+
+impl AppState {
+    #[must_use]
+    pub fn store(&self) -> &SqliteStore {
+        &self.store
+    }
+
+    /// Persist and publish an ordered run event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] when the event cannot be persisted.
+    pub fn append_event(
+        &self,
+        run_id: &EntityId,
+        kind: impl Into<String>,
+        payload: Value,
+    ) -> Result<RunEvent, StoreError> {
+        let event = self.store.append_run_event(run_id, kind, payload)?;
+        let _receiver_count = self.events.send(event.clone());
+        Ok(event)
+    }
+}
+
+#[derive(Debug)]
+struct SessionSecurity {
+    session_token: String,
+    csrf_token: String,
+    origin: String,
+}
+
+impl SessionSecurity {
+    fn new(address: SocketAddr) -> Self {
+        Self {
+            session_token: random_token(),
+            csrf_token: random_token(),
+            origin: format!("http://{address}"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ControlClaim {
+    path: PathBuf,
+    session_token: String,
+}
+
+impl Drop for ControlClaim {
+    fn drop(&mut self) {
+        remove_control_descriptor_if_owned(&self.path, &self.session_token);
+    }
+}
+
+async fn claim_control_descriptor(
+    path: &FsPath,
+    descriptor: &ControlDescriptor,
+) -> anyhow::Result<ControlClaim> {
+    if let Ok(source) = fs::read_to_string(path) {
+        if let Ok(existing) = serde_json::from_str::<ControlDescriptor>(&source) {
+            let live = existing.address.ip().is_loopback()
+                && tokio::time::timeout(
+                    Duration::from_millis(250),
+                    tokio::net::TcpStream::connect(existing.address),
+                )
+                .await
+                .is_ok_and(|result| result.is_ok());
+            if live {
+                anyhow::bail!(
+                    "another BA Agent control service is already listening at {}",
+                    existing.address
+                );
+            }
+        }
+        fs::remove_file(path)?;
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let body = serde_json::to_vec_pretty(descriptor)?;
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)?;
+    if let Err(error) = file.write_all(&body).and_then(|()| file.sync_all()) {
+        let _ignored = fs::remove_file(path);
+        return Err(error.into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            let _ignored = fs::remove_file(path);
+            return Err(error.into());
+        }
+    }
+    Ok(ControlClaim {
+        path: path.to_path_buf(),
+        session_token: descriptor.session_token.clone(),
+    })
+}
+
+fn remove_control_descriptor_if_owned(path: &FsPath, session_token: &str) {
+    let owned = fs::read_to_string(path)
+        .ok()
+        .and_then(|source| serde_json::from_str::<ControlDescriptor>(&source).ok())
+        .is_some_and(|descriptor| descriptor.session_token == session_token);
+    if owned {
+        let _ignored = fs::remove_file(path);
+    }
+}
+
+/// Start a loopback-only server with a fresh session credential.
+///
+/// # Errors
+///
+/// Returns an error when binding, database initialization, or server startup fails.
+pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
+    let listener = TcpListener::bind(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        config.port,
+    ))
+    .await?;
+    let address = listener.local_addr()?;
+    if !address.ip().is_loopback() {
+        anyhow::bail!("refusing non-loopback address: {address}");
+    }
+    let security = Arc::new(SessionSecurity::new(address));
+    let launch_url = format!(
+        "{}/session?token={}",
+        security.origin, security.session_token
+    );
+    let descriptor = ControlDescriptor {
+        address,
+        origin: security.origin.clone(),
+        session_token: security.session_token.clone(),
+        csrf_token: security.csrf_token.clone(),
+        process_id: std::process::id(),
+        started_at: now().to_rfc3339(),
+    };
+    let control_claim =
+        claim_control_descriptor(&config.control_descriptor_path, &descriptor).await?;
+    let (events, _receiver) = broadcast::channel(1_024);
+    let store = SqliteStore::open(config.database_path)?;
+    ensure_builtin_agent_profiles(&store)?;
+    let runtime: Arc<dyn RuntimeAdapter> = Arc::new(CodexAdapter::new(config.codex_binary));
+    let capabilities = runtime.probe().await?;
+    let recovery_records =
+        RecoveryCoordinator::new(store.clone()).reconcile(&BTreeSet::new(), &capabilities)?;
+    let control = RuntimeCoordinator::with_event_sender(store.clone(), runtime, events.clone());
+    for record in recovery_records {
+        if matches!(record.action, RecoveryAction::Resume { .. }) {
+            if let Err(error) = control.resume(&record.run_id, None).await {
+                tracing::warn!(
+                    run_id = %record.run_id,
+                    error = %error,
+                    "automatic runtime recovery remained orphaned"
+                );
+            }
+        }
+    }
+    let state = AppState {
+        store,
+        security,
+        events,
+        worktree_root: config.worktree_root,
+        control,
+        github: GitHubAdapter::default(),
+    };
+    let (shutdown, receiver) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let result = axum::serve(listener, router(state))
+            .with_graceful_shutdown(async move {
+                let _ignored = receiver.await;
+            })
+            .await
+            .map_err(anyhow::Error::from);
+        drop(control_claim);
+        result
+    });
+    Ok(ServerHandle {
+        address,
+        launch_url,
+        shutdown: Some(shutdown),
+        task,
+    })
+}
+
+pub fn router(state: AppState) -> Router {
+    let api = Router::new()
+        .route("/session", get(session_info))
+        .route("/overview", get(overview))
+        .route("/projects", get(list_projects).post(create_project))
+        .route("/projects/{id}", get(get_project))
+        .route("/agent-profiles", get(list_agent_profiles))
+        .route(
+            "/workstreams",
+            get(list_workstreams).post(create_workstream),
+        )
+        .route("/tasks", get(list_tasks).post(create_task))
+        .route("/tasks/{id}/transition", post(transition_task))
+        .route("/dispatches", post(create_dispatch))
+        .route("/runs", get(list_runs))
+        .route("/runs/{id}", get(get_run))
+        .route("/runs/{id}/events", get(run_events))
+        .route("/runs/{id}/message", post(message_run))
+        .route("/runs/{id}/cancel", post(cancel_run))
+        .route("/approvals", get(list_approvals))
+        .route("/approvals/{id}/respond", post(respond_approval))
+        .route("/gates", get(list_gates))
+        .route("/gates/run", post(run_gate))
+        .route("/receipts", get(list_receipts))
+        .route("/receipts/verify", post(verify_receipts))
+        .route("/adapters", get(adapter_status))
+        .route("/adapters/github/repository", get(github_repository))
+        .route_layer(middleware::from_fn_with_state(state.clone(), api_security));
+
+    Router::new()
+        .route("/session", get(open_session))
+        .route("/api/v1/health", get(health))
+        .nest(API_PREFIX, api)
+        .route("/", get(index))
+        .route("/{*path}", get(asset))
+        .with_state(state)
+        .layer(CompressionLayer::new())
+        .layer(CatchPanicLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(security_headers))
+}
+
+async fn open_session(
+    State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    if query.get("token").map(String::as_str) != Some(state.security.session_token.as_str()) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid launch token",
+        ));
+    }
+    let cookie = format!(
+        "ba_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800",
+        state.security.session_token
+    );
+    let mut response = Redirect::to("/").into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).map_err(ApiError::internal)?,
+    );
+    response.headers_mut().insert(
+        "x-ba-csrf-token",
+        HeaderValue::from_str(&state.security.csrf_token).map_err(ApiError::internal)?,
+    );
+    Ok(response)
+}
+
+async fn session_info(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "csrfToken": state.security.csrf_token,
+        "origin": state.security.origin,
+        "expiresInSeconds": 28_800
+    }))
+}
+
+async fn api_security(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(';')
+                .map(str::trim)
+                .find_map(|part| part.strip_prefix("ba_session="))
+        });
+    if bearer != Some(state.security.session_token.as_str())
+        && cookie != Some(state.security.session_token.as_str())
+    {
+        return ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized", "session required")
+            .into_response();
+    }
+    if !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        let origin_ok = headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            == Some(state.security.origin.as_str());
+        let csrf_ok = headers
+            .get("x-ba-csrf-token")
+            .and_then(|value| value.to_str().ok())
+            == Some(state.security.csrf_token.as_str());
+        if !origin_ok || !csrf_ok {
+            return ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Origin or CSRF failed")
+                .into_response();
+        }
+    }
+    next.run(request).await
+}
+
+async fn security_headers(request: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    state.store.integrity_check()?;
+    Ok(Json(json!({
+        "status": "ok",
+        "service": "ba-agent-control",
+        "schemaVersion": state.store.schema_version()?,
+        "telemetry": false
+    })))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Overview {
+    projects: Vec<Project>,
+    pending_approvals: usize,
+    running_runs: usize,
+    failed_runs: usize,
+    orphaned_runs: usize,
+}
+
+async fn overview(State(state): State<AppState>) -> Result<Json<Overview>, ApiError> {
+    Ok(Json(Overview {
+        projects: state.store.list_projects()?,
+        pending_approvals: state.store.list_pending_approvals()?.len(),
+        running_runs: state
+            .store
+            .list_runs_by_status(ba_core::RunStatus::Running)?
+            .len(),
+        failed_runs: state
+            .store
+            .list_runs_by_status(ba_core::RunStatus::Failed)?
+            .len(),
+        orphaned_runs: state
+            .store
+            .list_runs_by_status(ba_core::RunStatus::Orphaned)?
+            .len(),
+    }))
+}
+
+async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, ApiError> {
+    Ok(Json(state.store.list_projects()?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateProject {
+    name: String,
+    root_path: PathBuf,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_language")]
+    language: String,
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(input): Json<CreateProject>,
+) -> Result<(StatusCode, Json<Project>), ApiError> {
+    if input.name.trim().is_empty() {
+        return Err(ApiError::bad_request("project name must not be empty"));
+    }
+    let root = input
+        .root_path
+        .canonicalize()
+        .map_err(|error| ApiError::bad_request(format!("invalid project root: {error}")))?;
+    ensure_git_root(&root)?;
+    let stamp = now();
+    let project = Project {
+        id: EntityId::new(),
+        name: input.name.trim().to_owned(),
+        root_path: root.to_string_lossy().into_owned(),
+        description: input.description,
+        language: input.language,
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    state.store.upsert_project(&project)?;
+    Ok((StatusCode::CREATED, Json(project)))
+}
+
+async fn get_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Project>, ApiError> {
+    state
+        .store
+        .get_project(&parse_id(&id)?)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("project not found"))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectQuery {
+    project_id: String,
+}
+
+async fn list_workstreams(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<Workstream>>, ApiError> {
+    Ok(Json(
+        state
+            .store
+            .list_workstreams(&parse_id(&query.project_id)?)?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWorkstream {
+    project_id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+async fn create_workstream(
+    State(state): State<AppState>,
+    Json(input): Json<CreateWorkstream>,
+) -> Result<(StatusCode, Json<Workstream>), ApiError> {
+    if input.name.trim().is_empty() {
+        return Err(ApiError::bad_request("workstream name must not be empty"));
+    }
+    let project_id = parse_id(&input.project_id)?;
+    if state.store.get_project(&project_id)?.is_none() {
+        return Err(ApiError::not_found("project not found"));
+    }
+    let stamp = now();
+    let workstream = Workstream {
+        id: EntityId::new(),
+        project_id,
+        name: input.name.trim().to_owned(),
+        description: input.description,
+        status: "active".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    state.store.upsert_workstream(&workstream)?;
+    Ok((StatusCode::CREATED, Json(workstream)))
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<Task>>, ApiError> {
+    Ok(Json(state.store.list_tasks(&parse_id(&query.project_id)?)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTask {
+    project_id: String,
+    workstream_id: Option<String>,
+    milestone_id: Option<String>,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    write: bool,
+    #[serde(default)]
+    path_scope: Vec<String>,
+    #[serde(default)]
+    depends_on: Vec<String>,
+}
+
+async fn create_task(
+    State(state): State<AppState>,
+    Json(input): Json<CreateTask>,
+) -> Result<(StatusCode, Json<Task>), ApiError> {
+    if input.title.trim().is_empty() || (input.write && input.path_scope.is_empty()) {
+        return Err(ApiError::bad_request(
+            "task title and write scope are required",
+        ));
+    }
+    let project_id = parse_id(&input.project_id)?;
+    if state.store.get_project(&project_id)?.is_none() {
+        return Err(ApiError::not_found("project not found"));
+    }
+    let workstream_id = input.workstream_id.map(|id| parse_id(&id)).transpose()?;
+    if let Some(id) = &workstream_id {
+        let workstream = state
+            .store
+            .get_workstream(id)?
+            .ok_or_else(|| ApiError::not_found("workstream not found"))?;
+        if workstream.project_id != project_id {
+            return Err(ApiError::bad_request(
+                "workstream belongs to a different project",
+            ));
+        }
+    }
+    let milestone_id = input.milestone_id.map(|id| parse_id(&id)).transpose()?;
+    if let Some(id) = &milestone_id {
+        let milestone = state
+            .store
+            .get_milestone(id)?
+            .ok_or_else(|| ApiError::not_found("milestone not found"))?;
+        if milestone.project_id != project_id {
+            return Err(ApiError::bad_request(
+                "milestone belongs to a different project",
+            ));
+        }
+    }
+    for scope in &input.path_scope {
+        RepoPath::new(scope)
+            .map_err(|error| ApiError::bad_request(format!("invalid write scope: {error}")))?;
+    }
+    let depends_on = input
+        .depends_on
+        .into_iter()
+        .map(|id| parse_id(&id))
+        .collect::<Result<Vec<_>, _>>()?;
+    for dependency_id in &depends_on {
+        let dependency = state
+            .store
+            .get_task(dependency_id)?
+            .ok_or_else(|| ApiError::not_found("dependency task not found"))?;
+        if dependency.project_id != project_id {
+            return Err(ApiError::bad_request(
+                "dependency task belongs to a different project",
+            ));
+        }
+    }
+    let stamp = now();
+    let task = Task {
+        id: EntityId::new(),
+        project_id,
+        workstream_id,
+        milestone_id,
+        title: input.title.trim().to_owned(),
+        description: input.description,
+        status: TaskStatus::Draft,
+        write: input.write,
+        path_scope: input.path_scope,
+        depends_on,
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    state.store.upsert_task(&task)?;
+    Ok((StatusCode::CREATED, Json(task)))
+}
+
+#[derive(Debug, Deserialize)]
+struct TransitionInput {
+    status: String,
+}
+
+async fn transition_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<TransitionInput>,
+) -> Result<Json<Task>, ApiError> {
+    let status = TaskStatus::from_str(&input.status)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(Json(state.store.transition_task(&parse_id(&id)?, status)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDispatch {
+    task_id: String,
+    agent_profile_id: Option<String>,
+    prompt: Option<String>,
+}
+
+async fn create_dispatch(
+    State(state): State<AppState>,
+    Json(input): Json<CreateDispatch>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let task_id = parse_id(&input.task_id)?;
+    let profile_id = input.agent_profile_id.map(|id| parse_id(&id)).transpose()?;
+    let bundle = DispatchCoordinator::new(state.store.clone(), state.worktree_root.clone())
+        .enqueue(&task_id, profile_id.as_ref())
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let bundle = state
+        .control
+        .launch(bundle, input.prompt)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok((StatusCode::ACCEPTED, Json(json!(bundle))))
+}
+
+#[derive(Debug, Deserialize)]
+struct RunQuery {
+    task_id: Option<String>,
+    project_id: Option<String>,
+}
+
+async fn list_runs(
+    State(state): State<AppState>,
+    Query(query): Query<RunQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let runs = if let Some(id) = query.task_id {
+        state.store.list_runs(&parse_id(&id)?)?
+    } else if let Some(id) = query.project_id {
+        state.store.list_project_runs(&parse_id(&id)?)?
+    } else {
+        return Err(ApiError::bad_request("task_id or project_id is required"));
+    };
+    Ok(Json(json!(runs)))
+}
+
+async fn get_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .store
+        .get_run(&parse_id(&id)?)?
+        .map(|run| Json(json!(run)))
+        .ok_or_else(|| ApiError::not_found("run not found"))
+}
+
+#[derive(Debug, Deserialize)]
+struct RunMessageInput {
+    message: String,
+}
+
+async fn message_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<RunMessageInput>,
+) -> Result<(StatusCode, Json<RunEvent>), ApiError> {
+    if input.message.trim().is_empty() {
+        return Err(ApiError::bad_request("message must not be empty"));
+    }
+    let run_id = parse_id(&id)?;
+    let event = state
+        .control
+        .message(&run_id, &input.message)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok((StatusCode::ACCEPTED, Json(event)))
+}
+
+async fn cancel_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let run_id = parse_id(&id)?;
+    let (run, event) = state
+        .control
+        .cancel(&run_id, "local_user")
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok(Json(json!({"run": run, "event": event})))
+}
+
+#[derive(Debug, Deserialize)]
+struct EventQuery {
+    #[serde(default)]
+    after: u64,
+}
+
+async fn run_events(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<EventQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let run_id = parse_id(&id)?;
+    if state.store.get_run(&run_id)?.is_none() {
+        return Err(ApiError::not_found("run not found"));
+    }
+    let initial = tokio_stream::iter(
+        state
+            .store
+            .list_run_events(&run_id, query.after)?
+            .into_iter()
+            .map(|event| Ok(event_to_sse(event))),
+    );
+    let target = run_id.clone();
+    let live =
+        BroadcastStream::new(state.events.subscribe()).filter_map(move |result| match result {
+            Ok(event) if event.run_id == target && event.sequence > query.after => {
+                Some(Ok(event_to_sse(event)))
+            }
+            _ => None,
+        });
+    Ok(Sse::new(initial.chain(live)).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
+fn event_to_sse(event: RunEvent) -> Event {
+    let data = serde_json::to_string(&event)
+        .unwrap_or_else(|error| json!({"error": error.to_string()}).to_string());
+    Event::default()
+        .id(event.sequence.to_string())
+        .event(event.kind)
+        .data(data)
+}
+
+async fn list_approvals(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(state.store.list_pending_approvals()?)))
+}
+
+#[derive(Debug, Deserialize)]
+struct ApprovalInput {
+    decision: String,
+    #[serde(default)]
+    reason: String,
+}
+
+async fn respond_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<ApprovalInput>,
+) -> Result<Json<Value>, ApiError> {
+    let (resolution, runtime_decision) = match input.decision.as_str() {
+        "approved" => (ApprovalResolution::Approve, RuntimeApprovalDecision::Accept),
+        "approved_for_session" => (
+            ApprovalResolution::Approve,
+            RuntimeApprovalDecision::AcceptForSession,
+        ),
+        "rejected" | "denied" => (ApprovalResolution::Reject, RuntimeApprovalDecision::Decline),
+        "cancelled" => (ApprovalResolution::Cancel, RuntimeApprovalDecision::Cancel),
+        _ => return Err(ApiError::bad_request("unknown approval decision")),
+    };
+    let approval_id = parse_id(&id)?;
+    let evidence = json!({
+        "reason": input.reason,
+        "actor": "local_user"
+    });
+    let (approval, event) = state
+        .control
+        .respond_approval(&approval_id, resolution, runtime_decision, &evidence)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok(Json(json!({"approval": approval, "event": event})))
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskQuery {
+    task_id: String,
+}
+
+async fn list_gates(
+    State(state): State<AppState>,
+    Query(query): Query<TaskQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(
+        state.store.list_gates(&parse_id(&query.task_id)?)?
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunGateInput {
+    task_id: String,
+    run_id: Option<String>,
+    gate: String,
+}
+
+async fn run_gate(
+    State(state): State<AppState>,
+    Json(input): Json<RunGateInput>,
+) -> Result<Json<Value>, ApiError> {
+    let task_id = parse_id(&input.task_id)?;
+    let task = state
+        .store
+        .get_task(&task_id)?
+        .ok_or_else(|| ApiError::not_found("task not found"))?;
+    let project = state
+        .store
+        .get_project(&task.project_id)?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
+    let project_root = PathBuf::from(&project.root_path)
+        .canonicalize()
+        .map_err(ApiError::internal)?;
+    let definition = configured_gate(&project_root, &input.gate)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let run_id = input.run_id.map(|id| parse_id(&id)).transpose()?;
+    if let Some(id) = &run_id {
+        let run = state
+            .store
+            .get_run(id)?
+            .ok_or_else(|| ApiError::not_found("run not found"))?;
+        if run.task_id != task_id {
+            return Err(ApiError::bad_request("run belongs to a different task"));
+        }
+    }
+    let gate = GateCoordinator::new(state.store.clone())
+        .run(&task_id, run_id.as_ref(), &project_root, &definition)
+        .await
+        .map_err(ApiError::internal)?;
+    if let Some(run_id) = &run_id {
+        let _event = state.append_event(run_id, "gate.completed", json!({"gate": &gate}))?;
+    }
+    let finalization =
+        FinalizationCoordinator::new(state.store.clone(), state.worktree_root.clone())
+            .finalize_if_eligible(&task_id, run_id.as_ref())
+            .map_err(ApiError::internal)?;
+    if let (Some(run_id), Some(finalization)) = (&run_id, &finalization) {
+        let _event = state.append_event(
+            run_id,
+            "worktree.committed",
+            json!({"finalization": finalization}),
+        )?;
+    }
+    Ok(Json(json!({"gate": gate, "finalization": finalization})))
+}
+
+async fn list_receipts(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(
+        state.store.list_receipts(&parse_id(&query.project_id)?)?
+    )))
+}
+
+async fn verify_receipts(
+    State(state): State<AppState>,
+    Json(query): Json<ProjectQuery>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .store
+        .verify_receipt_chain(&parse_id(&query.project_id)?)?;
+    Ok(Json(json!({"valid": true})))
+}
+
+async fn adapter_status(State(state): State<AppState>) -> Json<Value> {
+    let github = state.github.probe().await;
+    Json(json!({"adapters": [
+        {"id":"codex","minimumVersion":"0.130.0","preferredTransport":"app-server","fallbackTransport":"exec-json","credentialsStored":false},
+        {"id":"claude","mode":"configuration-only","liveDispatch":false},
+        {"id":"github","mode":"optional-read-only","status":github}
+    ]}))
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepositoryQuery {
+    repository: String,
+}
+
+async fn github_repository(
+    State(state): State<AppState>,
+    Query(query): Query<GitHubRepositoryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let repository = state
+        .github
+        .view_repository(&query.repository)
+        .await
+        .map_err(|error| match error {
+            GitHubError::InvalidRepository(_) => ApiError::bad_request(error.to_string()),
+            GitHubError::AuthenticationUnavailable => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "github_auth_unavailable",
+                error.to_string(),
+            ),
+            _ => ApiError::new(StatusCode::BAD_GATEWAY, "github_error", error.to_string()),
+        })?;
+    Ok(Json(json!(repository)))
+}
+
+async fn list_agent_profiles(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!(state.store.list_agent_profiles()?)))
+}
+
+async fn index() -> Response {
+    embedded_response("index.html")
+}
+
+async fn asset(Path(path): Path<String>) -> Response {
+    let path = path.trim_start_matches('/');
+    if path.split('/').any(|part| part == "." || part == "..") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    embedded_asset(path).map_or_else(
+        || embedded_response("index.html"),
+        |(bytes, mime)| bytes_response(bytes, mime),
+    )
+}
+
+fn embedded_response(path: &str) -> Response {
+    embedded_asset(path).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |(bytes, mime)| bytes_response(bytes, mime),
+    )
+}
+
+fn bytes_response(bytes: &'static [u8], mime: &'static str) -> Response {
+    let mut response = bytes.to_vec().into_response();
+    if let Ok(value) = HeaderValue::from_str(mime) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    response
+}
+
+fn ensure_git_root(root: &FsPath) -> Result<(), ApiError> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(ApiError::internal)?;
+    if !output.status.success() {
+        return Err(ApiError::bad_request(
+            "project root is not a Git repository",
+        ));
+    }
+    let actual = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+        .canonicalize()
+        .map_err(ApiError::internal)?;
+    if actual != root {
+        return Err(ApiError::bad_request(format!(
+            "project path must be the repository root: {}",
+            actual.display()
+        )));
+    }
+    Ok(())
+}
+
+fn parse_id(value: &str) -> Result<EntityId, ApiError> {
+    EntityId::from_str(value).map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+fn random_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+fn default_language() -> String {
+    "zh-CN".into()
+}
+
+#[derive(Debug)]
+pub struct ApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+impl ApiError {
+    fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
+    }
+    fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, "not_found", message)
+    }
+    fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, "conflict", message)
+    }
+    fn bad_gateway(error: impl std::fmt::Display) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, "runtime_error", error.to_string())
+    }
+    fn internal(error: impl std::fmt::Display) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            error.to_string(),
+        )
+    }
+}
+
+impl From<StoreError> for ApiError {
+    fn from(error: StoreError) -> Self {
+        Self::internal(error)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(json!({"error":{"code":self.code,"message":self.message}})),
+        )
+            .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::http::Request;
+    use ba_core::{Run, RunStatus};
+    use ba_runtime::{
+        ApprovalDecision, CodexVersion, MINIMUM_CODEX_VERSION, ResumeRequest, RunRequest,
+        RuntimeAdapter, RuntimeCapabilities, RuntimeError, RuntimeEvent, RuntimeEventKind,
+        RuntimeRunHandle, RuntimeTransport, SandboxMode,
+    };
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    #[derive(Debug)]
+    struct MockRuntime {
+        events: broadcast::Sender<RuntimeEvent>,
+    }
+
+    impl MockRuntime {
+        fn new() -> Self {
+            let (events, _receiver) = broadcast::channel(16);
+            Self { events }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RuntimeAdapter for MockRuntime {
+        async fn probe(&self) -> Result<RuntimeCapabilities, RuntimeError> {
+            Ok(RuntimeCapabilities {
+                adapter: "mock".into(),
+                available: true,
+                version: Some(CodexVersion::new(0, 130, 0)),
+                minimum_version: MINIMUM_CODEX_VERSION,
+                app_server: true,
+                exec_json_fallback: true,
+                approvals: true,
+                resume: true,
+                guide: true,
+                cancellation: true,
+                degraded_reason: None,
+            })
+        }
+
+        async fn launch(&self, request: RunRequest) -> Result<RuntimeRunHandle, RuntimeError> {
+            if request
+                .environment
+                .get("BA_AGENT_MANAGED_RUN")
+                .map(String::as_str)
+                != Some("1")
+                || request.sandbox != SandboxMode::ReadOnly
+            {
+                return Err(RuntimeError::Protocol(
+                    "managed runtime policy was not applied".into(),
+                ));
+            }
+            let _receivers = self.events.send(RuntimeEvent {
+                sequence: 1,
+                run_id: "mock-runtime-run".into(),
+                kind: RuntimeEventKind::Lifecycle,
+                name: "succeeded".into(),
+                payload: json!({"status": 0}),
+            });
+            Ok(RuntimeRunHandle {
+                run_id: "mock-runtime-run".into(),
+                runtime_thread_id: Some("mock-thread".into()),
+                transport: RuntimeTransport::AppServer,
+                degraded_reason: None,
+            })
+        }
+
+        async fn resume(&self, request: ResumeRequest) -> Result<RuntimeRunHandle, RuntimeError> {
+            self.launch(RunRequest {
+                prompt: request.prompt,
+                cwd: request.cwd,
+                sandbox: request.sandbox,
+                environment: request.environment,
+            })
+            .await
+        }
+
+        async fn guide(&self, _run_id: &str, _prompt: String) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, _run_id: &str) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+
+        fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
+            self.events.subscribe()
+        }
+
+        async fn respond_approval(
+            &self,
+            _run_id: &str,
+            _request_id: &str,
+            _decision: ApprovalDecision,
+        ) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+    }
+
+    fn state() -> anyhow::Result<AppState> {
+        let directory = tempdir()?.keep();
+        let store = SqliteStore::open(directory.join("ba-agent.db"))?;
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41415);
+        let (events, _receiver) = broadcast::channel(16);
+        let control = RuntimeCoordinator::with_event_sender(
+            store.clone(),
+            Arc::new(CodexAdapter::new("codex")),
+            events.clone(),
+        );
+        Ok(AppState {
+            store,
+            security: Arc::new(SessionSecurity::new(address)),
+            events,
+            worktree_root: directory.join("worktrees"),
+            control,
+            github: GitHubAdapter::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn health_has_security_headers() -> anyhow::Result<()> {
+        let response = router(state()?)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .contains_key(header::CONTENT_SECURITY_POLICY)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn production_console_assets_are_embedded_instead_of_the_fallback() -> anyhow::Result<()> {
+        let (index, mime) = embedded_asset("index.html")
+            .ok_or_else(|| anyhow::anyhow!("embedded index is missing"))?;
+        let index = std::str::from_utf8(index)?;
+        assert_eq!(mime, "text/html; charset=utf-8");
+        assert!(index.contains("/assets/index-"));
+        assert!(!index.contains("控制台资源尚未构建"));
+        let script_start = index
+            .find("src=\"/assets/")
+            .ok_or_else(|| anyhow::anyhow!("hashed script path is missing"))?
+            + 5;
+        let script_end = index[script_start..]
+            .find('"')
+            .ok_or_else(|| anyhow::anyhow!("hashed script path is unterminated"))?
+            + script_start;
+        let script = &index[script_start..script_end];
+        assert!(embedded_asset(script.trim_start_matches('/')).is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn control_descriptor_is_single_owner_and_removed_on_drop() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("control.json");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let descriptor = ControlDescriptor {
+            address,
+            origin: format!("http://{address}"),
+            session_token: "session-fixture".into(),
+            csrf_token: "csrf-fixture".into(),
+            process_id: std::process::id(),
+            started_at: now().to_rfc3339(),
+        };
+        let claim = claim_control_descriptor(&path, &descriptor).await?;
+        assert!(path.is_file());
+        assert!(claim_control_descriptor(&path, &descriptor).await.is_err());
+        drop(claim);
+        assert!(!path.exists());
+        drop(listener);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resources_require_session() -> anyhow::Result<()> {
+        let response = router(state()?)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/projects")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_session_exposes_csrf_and_mutations_require_it() -> anyhow::Result<()> {
+        let state = state()?;
+        let session = state.security.session_token.clone();
+        let csrf = state.security.csrf_token.clone();
+        let origin = state.security.origin.clone();
+        let cookie = format!("ba_session={session}");
+        let application = router(state);
+
+        let response = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/session")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 16 * 1024).await?;
+        let body: Value = serde_json::from_slice(&body)?;
+        assert_eq!(body["csrfToken"], csrf);
+
+        let project_id = EntityId::new();
+        let payload = serde_json::to_vec(&json!({"project_id": project_id}))?;
+        let denied = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/receipts/verify")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::ORIGIN, &origin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload.clone()))?,
+            )
+            .await?;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let allowed = application
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/v1/receipts/verify")
+                    .header(header::COOKIE, cookie)
+                    .header(header::ORIGIN, origin)
+                    .header("x-ba-csrf-token", csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload))?,
+            )
+            .await?;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_launch_persists_runtime_identity_and_terminal_state() -> anyhow::Result<()> {
+        let directory = tempdir()?.keep();
+        let store = SqliteStore::open(directory.join("ba-agent.db"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "runtime-test".into(),
+            root_path: directory.to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        let task = Task {
+            id: EntityId::new(),
+            project_id: project.id.clone(),
+            workstream_id: None,
+            milestone_id: None,
+            title: "Inspect the repository".into(),
+            description: "Return evidence".into(),
+            status: TaskStatus::Draft,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_task(&task)?;
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41416);
+        let (events, _receiver) = broadcast::channel(16);
+        let control = RuntimeCoordinator::with_event_sender(
+            store.clone(),
+            Arc::new(MockRuntime::new()),
+            events.clone(),
+        );
+        let state = AppState {
+            store: store.clone(),
+            security: Arc::new(SessionSecurity::new(address)),
+            events,
+            worktree_root: directory.join("worktrees"),
+            control,
+            github: GitHubAdapter::default(),
+        };
+        let bundle = DispatchCoordinator::new(store.clone(), state.worktree_root.clone())
+            .enqueue(&task.id, None)?;
+        let launched = state.control.launch(bundle, None).await?;
+        assert_eq!(
+            launched.run.runtime_run_id.as_deref(),
+            Some("mock-runtime-run")
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let run = store.get_run(&launched.run.id).ok().flatten();
+                if run
+                    .as_ref()
+                    .is_some_and(|item| item.status == RunStatus::Succeeded)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            store
+                .get_task(&task.id)?
+                .ok_or_else(|| anyhow::anyhow!("task missing"))?
+                .status,
+            TaskStatus::Review
+        );
+        assert_eq!(
+            store
+                .get_dispatch(&launched.dispatch.id)?
+                .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?
+                .status,
+            "succeeded"
+        );
+        assert!(store.list_run_events(&launched.run.id, 0)?.len() >= 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn orphaned_run_resumes_from_persisted_thread_and_reaches_review() -> anyhow::Result<()> {
+        let directory = tempdir()?.keep();
+        let store = SqliteStore::open(directory.join("ba-agent.db"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "recovery-test".into(),
+            root_path: directory.to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        let task = Task {
+            id: EntityId::new(),
+            project_id: project.id,
+            workstream_id: None,
+            milestone_id: None,
+            title: "Resume the interrupted task".into(),
+            description: String::new(),
+            status: TaskStatus::Blocked,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_task(&task)?;
+        let run = Run {
+            id: EntityId::new(),
+            task_id: task.id.clone(),
+            agent_profile_id: None,
+            status: RunStatus::Orphaned,
+            adapter: "codex-app-server".into(),
+            runtime_run_id: Some("stale-process".into()),
+            runtime_thread_id: Some("persisted-thread".into()),
+            started_at: Some(stamp),
+            finished_at: None,
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_run(&run)?;
+        let control = RuntimeCoordinator::new(store.clone(), Arc::new(MockRuntime::new()));
+
+        let resumed = control.resume(&run.id, None).await?;
+        assert_eq!(resumed.runtime_run_id.as_deref(), Some("mock-runtime-run"));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if store
+                    .get_run(&run.id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|item| item.status == RunStatus::Succeeded)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            store
+                .get_task(&task.id)?
+                .ok_or_else(|| anyhow::anyhow!("task missing"))?
+                .status,
+            TaskStatus::Review
+        );
+        assert!(
+            store
+                .list_run_events(&run.id, 0)?
+                .iter()
+                .any(|event| event.kind == "recovery.resumed")
+        );
+        Ok(())
+    }
+}

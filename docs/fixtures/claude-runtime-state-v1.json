@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "runtime": "claude",
+  "capturedAt": "2026-08-24T09:00:00Z",
+  "tasks": [
+    {
+      "externalId": "synthetic-task-1",
+      "title": "Review generated compatibility files",
+      "status": "completed"
+    }
+  ],
+  "runs": [
+    {
+      "externalId": "synthetic-run-1",
+      "taskExternalId": "synthetic-task-1",
+      "status": "succeeded"
+    }
+  ]
+}

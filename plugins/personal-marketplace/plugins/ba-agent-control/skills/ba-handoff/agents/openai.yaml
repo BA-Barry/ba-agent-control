@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Handoff"
+  short_description: "Create a structured handoff between BA Agent roles."
+  default_prompt: "Use $ba-handoff to prepare an evidence-backed handoff for the next role."

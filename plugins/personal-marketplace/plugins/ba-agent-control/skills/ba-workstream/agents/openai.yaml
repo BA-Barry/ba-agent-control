@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Workstream"
+  short_description: "Create or refine BA Agent workstreams and milestones."
+  default_prompt: "Use $ba-workstream to organize this project into workstreams and milestones."

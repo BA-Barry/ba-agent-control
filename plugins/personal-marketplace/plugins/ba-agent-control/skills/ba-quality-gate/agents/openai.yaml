@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Quality Gate"
+  short_description: "Run and record BA Agent quality gates."
+  default_prompt: "Use $ba-quality-gate to evaluate gates and produce a verifiable receipt."

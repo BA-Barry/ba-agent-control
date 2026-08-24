@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Design"
+  short_description: "Design a technical change for BA Agent execution."
+  default_prompt: "Use $ba-design to produce a scoped design with explicit risks and interfaces."

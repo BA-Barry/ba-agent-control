@@ -1,0 +1,533 @@
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+
+use ba_core::{AgentProfile, Approval, EntityId, Run, RunEvent, RunStatus, Task, TaskStatus, now};
+use ba_runtime::{
+    ApprovalDecision, ResumeRequest, RunRequest, RuntimeAdapter, RuntimeEvent, RuntimeEventKind,
+    RuntimeTransport, SandboxMode,
+};
+use ba_store::{SqliteStore, TerminalRunUpdate};
+use serde_json::{Value, json};
+use tokio::sync::broadcast;
+
+use crate::{ApprovalCoordinator, ApprovalResolution, DispatchBundle, SchedulerError};
+
+/// Shared runtime lifecycle used by HTTP, MCP, and CLI control surfaces.
+#[derive(Clone, Debug)]
+pub struct RuntimeCoordinator {
+    store: SqliteStore,
+    runtime: Arc<dyn RuntimeAdapter>,
+    events: broadcast::Sender<RunEvent>,
+}
+
+#[derive(Debug)]
+struct RecoveryLaunch {
+    task: Task,
+    request: ResumeRequest,
+}
+
+impl RuntimeCoordinator {
+    #[must_use]
+    pub fn new(store: SqliteStore, runtime: Arc<dyn RuntimeAdapter>) -> Self {
+        let (events, _receiver) = broadcast::channel(2_048);
+        Self::with_event_sender(store, runtime, events)
+    }
+
+    #[must_use]
+    pub fn with_event_sender(
+        store: SqliteStore,
+        runtime: Arc<dyn RuntimeAdapter>,
+        events: broadcast::Sender<RunEvent>,
+    ) -> Self {
+        Self {
+            store,
+            runtime,
+            events,
+        }
+    }
+
+    #[must_use]
+    pub fn subscribe_events(&self) -> broadcast::Receiver<RunEvent> {
+        self.events.subscribe()
+    }
+
+    /// Persist and publish one ordered domain event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the event cannot be persisted.
+    pub fn append_event(
+        &self,
+        run_id: &EntityId,
+        kind: impl Into<String>,
+        payload: Value,
+    ) -> Result<RunEvent, SchedulerError> {
+        let event = self.store.append_run_event(run_id, kind, payload)?;
+        let _receiver_count = self.events.send(event.clone());
+        Ok(event)
+    }
+
+    /// Start a queued dispatch in the runtime and bridge all events into durable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when entities are missing, the working directory is invalid,
+    /// or the runtime launch fails.
+    pub async fn launch(
+        &self,
+        mut bundle: DispatchBundle,
+        prompt_override: Option<String>,
+    ) -> Result<DispatchBundle, SchedulerError> {
+        let task = self.store.get_task(&bundle.run.task_id)?.ok_or_else(|| {
+            SchedulerError::NotSchedulable("task disappeared after dispatch".into())
+        })?;
+        let project = self.store.get_project(&task.project_id)?.ok_or_else(|| {
+            SchedulerError::NotSchedulable("project disappeared after dispatch".into())
+        })?;
+        let profile = bundle
+            .run
+            .agent_profile_id
+            .as_ref()
+            .map(|id| self.store.get_agent_profile(id))
+            .transpose()?
+            .flatten();
+        let cwd = bundle.worktree.as_ref().map_or_else(
+            || PathBuf::from(&project.root_path),
+            |worktree| PathBuf::from(&worktree.path),
+        );
+        let cwd = cwd.canonicalize()?;
+        let prompt = prompt_override
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| compose_task_prompt(&task, profile.as_ref()));
+        let environment = managed_run_environment(&task)?;
+        let mut runtime_events = self.runtime.subscribe();
+
+        self.store
+            .transition_run(&bundle.run.id, RunStatus::Starting)?;
+        let launched = match self
+            .runtime
+            .launch(RunRequest {
+                prompt,
+                cwd,
+                sandbox: if task.write {
+                    SandboxMode::WorkspaceWrite
+                } else {
+                    SandboxMode::ReadOnly
+                },
+                environment,
+            })
+            .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.finish_run(
+                    &bundle.run.id,
+                    RunStatus::Failed,
+                    "runtime.launch_failed",
+                    json!({"error": error.to_string()}),
+                )?;
+                return Err(error.into());
+            }
+        };
+
+        self.store.transition_task(&task.id, TaskStatus::Running)?;
+        let mut run = self
+            .store
+            .transition_run(&bundle.run.id, RunStatus::Running)?;
+        run.runtime_run_id = Some(launched.run_id.clone());
+        run.runtime_thread_id
+            .clone_from(&launched.runtime_thread_id);
+        run.started_at = Some(now());
+        run.adapter = match launched.transport {
+            RuntimeTransport::AppServer => "codex-app-server",
+            RuntimeTransport::ExecJson => "codex-exec-json",
+        }
+        .into();
+        self.store.upsert_run(&run)?;
+        bundle.run = run;
+        bundle.dispatch.status = "running".into();
+        bundle.dispatch.updated_at = now();
+        self.store.upsert_dispatch(&bundle.dispatch)?;
+        self.append_event(
+            &bundle.run.id,
+            "runtime.started",
+            json!({
+                "runtimeRunId": launched.run_id,
+                "runtimeThreadId": launched.runtime_thread_id,
+                "transport": launched.transport,
+                "degradedReason": launched.degraded_reason
+            }),
+        )?;
+
+        let coordinator = self.clone();
+        let domain_run_id = bundle.run.id.clone();
+        let runtime_run_id = launched.run_id;
+        tokio::spawn(async move {
+            coordinator
+                .bridge_events(domain_run_id, runtime_run_id, &mut runtime_events)
+                .await;
+        });
+        Ok(bundle)
+    }
+
+    /// Resume one orphaned domain run from its persisted Codex thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when recovery metadata is missing or Codex cannot resume
+    /// the thread. Failed attempts remain orphaned and blocked.
+    pub async fn resume(
+        &self,
+        run_id: &EntityId,
+        prompt_override: Option<String>,
+    ) -> Result<Run, SchedulerError> {
+        let RecoveryLaunch { task, request } = self.prepare_recovery(run_id, prompt_override)?;
+        let mut runtime_events = self.runtime.subscribe();
+        let resumed = match self.runtime.resume(request).await {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.append_event(
+                    run_id,
+                    "recovery.resume_failed",
+                    json!({"error": error.to_string()}),
+                )?;
+                return Err(error.into());
+            }
+        };
+
+        let mut run = self.store.transition_run(run_id, RunStatus::Running)?;
+        if task.status == TaskStatus::Blocked {
+            self.store.transition_task(&task.id, TaskStatus::Running)?;
+        }
+        run.runtime_run_id = Some(resumed.run_id.clone());
+        run.runtime_thread_id.clone_from(&resumed.runtime_thread_id);
+        run.adapter = match resumed.transport {
+            RuntimeTransport::AppServer => "codex-app-server",
+            RuntimeTransport::ExecJson => "codex-exec-json",
+        }
+        .into();
+        run.updated_at = now();
+        self.store.upsert_run(&run)?;
+        self.store.update_dispatch_status(run_id, "running")?;
+        self.append_event(
+            run_id,
+            "recovery.resumed",
+            json!({
+                "runtimeRunId": resumed.run_id,
+                "runtimeThreadId": resumed.runtime_thread_id,
+                "transport": resumed.transport,
+                "degradedReason": resumed.degraded_reason
+            }),
+        )?;
+
+        let coordinator = self.clone();
+        let domain_run_id = run.id.clone();
+        let runtime_run_id = resumed.run_id;
+        tokio::spawn(async move {
+            coordinator
+                .bridge_events(domain_run_id, runtime_run_id, &mut runtime_events)
+                .await;
+        });
+        Ok(run)
+    }
+
+    fn prepare_recovery(
+        &self,
+        run_id: &EntityId,
+        prompt_override: Option<String>,
+    ) -> Result<RecoveryLaunch, SchedulerError> {
+        let run = self
+            .store
+            .get_run(run_id)?
+            .ok_or_else(|| SchedulerError::NotActive(run_id.to_string()))?;
+        if run.status != RunStatus::Orphaned {
+            return Err(SchedulerError::NotActive(format!(
+                "run {run_id} is not orphaned"
+            )));
+        }
+        let thread_id = run
+            .runtime_thread_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| SchedulerError::NotActive("run has no resumable thread id".into()))?;
+        let task = self
+            .store
+            .get_task(&run.task_id)?
+            .ok_or_else(|| SchedulerError::NotActive("recovery task not found".into()))?;
+        let project = self
+            .store
+            .get_project(&task.project_id)?
+            .ok_or_else(|| SchedulerError::NotActive("recovery project not found".into()))?;
+        let profile = run
+            .agent_profile_id
+            .as_ref()
+            .map(|id| self.store.get_agent_profile(id))
+            .transpose()?
+            .flatten();
+        let worktree = self
+            .store
+            .list_worktrees(&task.project_id)?
+            .into_iter()
+            .find(|candidate| candidate.run_id.as_ref() == Some(run_id));
+        let cwd = worktree.map_or_else(
+            || PathBuf::from(project.root_path),
+            |worktree| PathBuf::from(worktree.path),
+        );
+        let prompt = prompt_override
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                format!(
+                    "恢复先前中断的 BA Agent 任务。\n\n{}",
+                    compose_task_prompt(&task, profile.as_ref())
+                )
+            });
+        let request = ResumeRequest {
+            thread_id,
+            prompt,
+            cwd: cwd.canonicalize()?,
+            sandbox: if task.write {
+                SandboxMode::WorkspaceWrite
+            } else {
+                SandboxMode::ReadOnly
+            },
+            environment: managed_run_environment(&task)?,
+        };
+        Ok(RecoveryLaunch { task, request })
+    }
+
+    /// Deliver guidance to an active runtime and record the user action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run is inactive or has no live runtime handle.
+    pub async fn message(
+        &self,
+        run_id: &EntityId,
+        message: &str,
+    ) -> Result<RunEvent, SchedulerError> {
+        let message = message.trim();
+        if message.is_empty() {
+            return Err(SchedulerError::NotActive("guidance is empty".into()));
+        }
+        let run = self.active_run(run_id)?;
+        let runtime_run_id = run
+            .runtime_run_id
+            .as_deref()
+            .ok_or_else(|| SchedulerError::NotActive("run has no live runtime handle".into()))?;
+        self.runtime
+            .guide(runtime_run_id, message.to_owned())
+            .await?;
+        self.append_event(
+            run_id,
+            "user.guidance",
+            json!({"message": message, "delivery": "runtime"}),
+        )
+    }
+
+    /// Interrupt an active runtime and persist cancellation immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run is inactive or has no live runtime handle.
+    pub async fn cancel(
+        &self,
+        run_id: &EntityId,
+        actor: &str,
+    ) -> Result<(Run, RunEvent), SchedulerError> {
+        let current = self.active_run(run_id)?;
+        let runtime_run_id = current
+            .runtime_run_id
+            .as_deref()
+            .ok_or_else(|| SchedulerError::NotActive("run has no live runtime handle".into()))?;
+        self.runtime.cancel(runtime_run_id).await?;
+        let update = self.finish_run(
+            run_id,
+            RunStatus::Cancelled,
+            "run.cancel_requested",
+            json!({"actor": actor}),
+        )?;
+        Ok((update.run, update.event))
+    }
+
+    /// Respond to a runtime or policy approval and resolve its durable record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the approval or runtime session is unavailable.
+    pub async fn respond_approval(
+        &self,
+        approval_id: &EntityId,
+        resolution: ApprovalResolution,
+        runtime_decision: ApprovalDecision,
+        evidence: &Value,
+    ) -> Result<(Approval, RunEvent), SchedulerError> {
+        let pending = self
+            .store
+            .get_approval(approval_id)?
+            .ok_or_else(|| SchedulerError::ApprovalAlreadyResolved(approval_id.to_string()))?;
+        if let Some(request_id) = pending.request.get("request_id").and_then(Value::as_str) {
+            let run = self.active_run(&pending.run_id)?;
+            let runtime_run_id = run.runtime_run_id.as_deref().ok_or_else(|| {
+                SchedulerError::NotActive("approval run has no live runtime handle".into())
+            })?;
+            self.runtime
+                .respond_approval(runtime_run_id, request_id, runtime_decision)
+                .await?;
+        }
+        let approval = ApprovalCoordinator::new(self.store.clone()).resolve(
+            approval_id,
+            resolution,
+            evidence,
+        )?;
+        let run = self
+            .store
+            .get_run(&approval.run_id)?
+            .ok_or_else(|| SchedulerError::NotActive(approval.run_id.to_string()))?;
+        let event = if matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
+            self.finish_run(
+                &approval.run_id,
+                run.status,
+                "approval.resolved",
+                json!({"approval": &approval}),
+            )?
+            .event
+        } else {
+            self.append_event(
+                &approval.run_id,
+                "approval.resolved",
+                json!({"approval": &approval}),
+            )?
+        };
+        Ok((approval, event))
+    }
+
+    fn active_run(&self, run_id: &EntityId) -> Result<Run, SchedulerError> {
+        let run = self
+            .store
+            .get_run(run_id)?
+            .ok_or_else(|| SchedulerError::NotActive(run_id.to_string()))?;
+        if !matches!(run.status, RunStatus::Running | RunStatus::WaitingApproval) {
+            return Err(SchedulerError::NotActive(run_id.to_string()));
+        }
+        Ok(run)
+    }
+
+    async fn bridge_events(
+        &self,
+        domain_run_id: EntityId,
+        runtime_run_id: String,
+        receiver: &mut broadcast::Receiver<RuntimeEvent>,
+    ) {
+        loop {
+            match receiver.recv().await {
+                Ok(event) if event.run_id == runtime_run_id => {
+                    let terminal =
+                        matches!(event.name.as_str(), "succeeded" | "failed" | "cancelled");
+                    if let Err(error) = self.persist_runtime_event(&domain_run_id, &event) {
+                        tracing::error!(error = %error, run_id = %domain_run_id, "runtime event persistence failed");
+                    }
+                    if terminal {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    let _ignored = self.append_event(
+                        &domain_run_id,
+                        "runtime.events_lagged",
+                        json!({"skipped": skipped}),
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }
+
+    fn persist_runtime_event(
+        &self,
+        run_id: &EntityId,
+        event: &RuntimeEvent,
+    ) -> Result<(), SchedulerError> {
+        let kind = format!("runtime.{}", event.name);
+        let payload = serde_json::to_value(event)?;
+        let terminal = match event.name.as_str() {
+            "succeeded" => Some(RunStatus::Succeeded),
+            "failed" => Some(RunStatus::Failed),
+            "cancelled" => Some(RunStatus::Cancelled),
+            _ => None,
+        };
+        if let Some(status) = terminal {
+            self.finish_run(run_id, status, kind, payload)?;
+        } else {
+            self.append_event(run_id, kind, payload)?;
+        }
+        if event.kind == RuntimeEventKind::ApprovalRequested {
+            let request_id = event
+                .payload
+                .get("id")
+                .map(|value| match value {
+                    Value::String(value) => value.clone(),
+                    other => other.to_string(),
+                })
+                .ok_or_else(|| {
+                    SchedulerError::NotActive("approval event did not contain an id".into())
+                })?;
+            ApprovalCoordinator::new(self.store.clone()).request_runtime_operation(
+                run_id,
+                &event.name,
+                &request_id,
+                &event.payload,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn finish_run(
+        &self,
+        run_id: &EntityId,
+        status: RunStatus,
+        event_kind: impl Into<String>,
+        event_payload: Value,
+    ) -> Result<TerminalRunUpdate, SchedulerError> {
+        let update = self
+            .store
+            .finish_run(run_id, status, event_kind, event_payload)?;
+        let _receiver_count = self.events.send(update.event.clone());
+        Ok(update)
+    }
+}
+
+fn compose_task_prompt(task: &Task, profile: Option<&AgentProfile>) -> String {
+    let mut sections = vec![format!("任务：{}", task.title)];
+    if !task.description.trim().is_empty() {
+        sections.push(format!("验收与说明：\n{}", task.description.trim()));
+    }
+    if task.write {
+        sections.push(format!("允许写入范围：{}", task.path_scope.join(", ")));
+    } else {
+        sections.push("本任务为只读任务，不得修改仓库文件。".into());
+    }
+    if let Some(profile) = profile {
+        if !profile.instructions.trim().is_empty() {
+            sections.push(format!(
+                "角色：{} / {}\n{}",
+                profile.name,
+                profile.role,
+                profile.instructions.trim()
+            ));
+        }
+    }
+    sections.push("完成任务并提供可验证证据；遇到需要人工许可的操作时发起审批。".into());
+    sections.join("\n\n")
+}
+
+fn managed_run_environment(task: &Task) -> Result<BTreeMap<String, String>, SchedulerError> {
+    let allowed_paths = std::env::join_paths(task.path_scope.iter().map(PathBuf::from))?
+        .to_string_lossy()
+        .into_owned();
+    Ok(BTreeMap::from([
+        ("BA_AGENT_MANAGED_RUN".into(), "1".into()),
+        ("BA_AGENT_ALLOWED_PATHS".into(), allowed_paths),
+        ("BA_AGENT_GATE_STATUS".into(), "pending".into()),
+        ("BA_AGENT_OPERATION_APPROVED".into(), "0".into()),
+    ]))
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Dispatch"
+  short_description: "Dispatch approved BA Agent tasks to the right role."
+  default_prompt: "Use $ba-dispatch to dispatch ready tasks within dependencies and write scopes."

@@ -1,0 +1,13 @@
+version = 1
+name = "BA Agent"
+language = "zh-CN"
+log_retention_days = 90
+max_concurrency = 4
+
+[gates]
+format = ["node", "scripts/quality-gate.mjs", "format"]
+lint = ["node", "scripts/quality-gate.mjs", "lint"]
+typecheck = ["node", "scripts/quality-gate.mjs", "typecheck"]
+changed_tests = ["node", "scripts/quality-gate.mjs", "changed-tests"]
+secret_scan = ["node", "scripts/quality-gate.mjs", "secret-scan"]
+diff_review = ["node", "scripts/quality-gate.mjs", "diff-review"]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Release"
+  short_description: "Prepare a local BA Agent release candidate."
+  default_prompt: "Use $ba-release to prepare release evidence without pushing or publishing."

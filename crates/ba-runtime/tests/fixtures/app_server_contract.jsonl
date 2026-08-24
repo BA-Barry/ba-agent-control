@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ba-agent-control","version":"0.1.0-alpha.1"},"capabilities":{"experimentalApi":false}}}
+{"jsonrpc":"2.0","method":"initialized"}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/repo","approvalPolicy":"on-request","sandbox":"workspace-write","ephemeral":false}}
+{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"thread_fixture","input":[{"type":"text","text":"Implement the task"}]}}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ba-agent-control": {
+      "command": "ba-agent-control",
+      "args": ["mcp", "serve"],
+      "env": {
+        "BA_AGENT_MCP_TRANSPORT": "stdio"
+      }
+    }
+  }
+}

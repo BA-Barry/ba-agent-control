@@ -1,0 +1,38 @@
+[package]
+name = "ba-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+ba-git = { path = "../ba-git" }
+ba-github = { path = "../ba-github" }
+ba-core = { path = "../ba-core" }
+ba-runtime = { path = "../ba-runtime" }
+ba-scheduler = { path = "../ba-scheduler" }
+ba-store = { path = "../ba-store" }
+chrono.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+http.workspace = true
+mime_guess.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+toml = "0.9"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

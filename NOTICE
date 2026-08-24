@@ -1,0 +1,13 @@
+BA Agent
+Copyright 2026 BA Agent contributors
+
+This product includes software developed by BA Agent contributors and is licensed
+under the Apache License, Version 2.0.
+
+The architecture and workflow model were informed by publicly observable ideas in
+TheAgency. BA Agent is an independent clean-room implementation: no TheAgency source
+code, trademarks, bundled applications, or copyrighted product assets are included.
+
+Development-environment references (not redistributed as product code):
+- Impeccable 4.1.1, upstream commit 56f44523..., Apache-2.0.
+- Taste Skill, upstream commit 37c8c376..., MIT.

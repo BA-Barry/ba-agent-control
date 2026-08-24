@@ -1,0 +1,15 @@
+{
+  "name": "ba-agent-control",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "build": "pnpm --filter @ba-agent/console build",
+    "dev": "pnpm --filter @ba-agent/console dev",
+    "lint": "pnpm --filter @ba-agent/console lint",
+    "test": "pnpm --filter @ba-agent/console test",
+    "test:e2e": "pnpm --filter @ba-agent/console test:e2e",
+    "typecheck": "pnpm --filter @ba-agent/console typecheck",
+    "validate": "pnpm lint && pnpm typecheck && pnpm test"
+  }
+}

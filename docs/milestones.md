@@ -1,0 +1,58 @@
+# Milestones
+
+## M1 — Foundation
+
+Single-binary server, migrations, empty console, plugin skeleton, validation, and three-platform CI.
+
+Status: **complete locally (2026-08-24)**.
+
+- Release Windows x64 binary: 8.79 MB, embedded hashed console assets, `doctor=ready`.
+- SQLite migration/integrity checks and loopback security tests pass.
+- CI matrix covers Windows, Ubuntu, and macOS and builds the console before Rust embedding.
+- Plugin bundle validates with 8 roles and 11 Skills; Hooks pass 15/15 tests.
+
+## M2 — Core vertical slice
+
+Register project → create task → dispatch Codex run → isolate worktree → stream events → run gates → issue receipt → create local commit → recover after restart.
+
+Status: **complete locally (2026-08-24)**.
+
+- A live ignored integration test completed a logged-in Codex App Server turn.
+- Runtime lifecycle is shared by HTTP and MCP, including guidance, cancellation, approvals, SSE events, fallback metadata, and automatic thread resume.
+- Write tasks persist detached worktree identity, base revision, and path scope.
+- Configured argv gates finalize only eligible worktrees to `ba/<workstream>/<task-id>`, then append a permanent hash-chained receipt.
+- Run, Task, Dispatch, and terminal Event updates are atomic and rollback-tested.
+
+## M3 — Complete Codex control
+
+App Server integration, four-way scheduling, roles, messages, approvals, hooks, optional GitHub adapter, and fallback/recovery behavior.
+
+Status: **complete locally (2026-08-24)**.
+
+- App Server control, Windows shim handling, protocol fixtures, exec fallback, messaging, approvals, cancellation, and restart recovery are implemented.
+- Eight durable built-in roles and the complete Hook guardrail set are installed and validated.
+- A live four-agent demonstration passed and blocked the fifth task at the configured concurrency limit.
+- The optional GitHub adapter enforces `gh` → OS credential store → current-process `GITHUB_TOKEN` precedence, exposes read-only repository metadata, never serializes credentials, and has no remote mutation entry point.
+
+## M4 — Personal Alpha console
+
+All seven surfaces, Chinese/English, light/dark/system themes, responsive and accessible operation, followed by Impeccable and scoped Taste audits. BA Agent begins self-hosting its own backlog.
+
+Status: **waiting at the comp-first decision gate**. No designed console surface has been implemented.
+
+## M5 — Claude compatibility and migration
+
+Canonical config generation, Claude compatibility report, TheAgency dry-run/import, and runtime-neutral receipt validation.
+
+Status: **complete locally (2026-08-24)**.
+
+- One canonical plugin source renders Codex and Claude instructions, eight roles, 11 Skills, Hooks, and the shared guard without overwriting user-owned content.
+- A structured compatibility report explicitly distinguishes Claude configuration support from unsupported live dispatch, realtime events, and interactive approvals.
+- Runtime state snapshots default to dry-run and import as canonical, digest-addressed evidence; Artifact and Receipt records are atomic and the authoritative Task/Run state machines are not bypassed.
+- The end-to-end CLI demonstration produced `configuration_only`, preserved 8 roles and 11 Skills, reported `would-create` before apply, created one Artifact and one Receipt, and verified the permanent receipt chain.
+
+## M6 — Public Beta
+
+Windows x64, Linux x64, macOS x64/arm64 archives; checksums; install/upgrade/rollback; third-party license inventory; reproducible docs; WCAG 2.2 AA and release quality gates. Remote publication remains separately approved.
+
+Status: **pending**. No remote repository or release has been created.

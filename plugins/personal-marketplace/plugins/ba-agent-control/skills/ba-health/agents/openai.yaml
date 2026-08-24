@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Health"
+  short_description: "Diagnose BA Agent project and adapter health."
+  default_prompt: "Use $ba-health to check BA Agent health and propose safe next actions."

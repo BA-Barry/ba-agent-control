@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Initialize"
+  short_description: "Initialize BA Agent in an existing Git repository."
+  default_prompt: "Use $ba-init to set up this repository without changing application code."

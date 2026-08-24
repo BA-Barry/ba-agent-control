@@ -1,0 +1,129 @@
+{
+  "title": "BA Agent 视觉方向 · 新一轮",
+  "question": "上一轮已经排除。请选择这一组全新的工作语法；所有方案都保留相同的功能、无障碍和 code-first 约束。",
+  "options": [
+    {
+      "id": "assigned-r1",
+      "label": "测量员外业簿",
+      "kicker": "THE ROLL",
+      "lineage": "控制点、导线测量、闭合差与外业记录",
+      "thesis": "把注册仓库当成控制点，把隔离 worktree 当成导线点，只有证据闭合的任务才能成为可靠坐标。",
+      "palette": ["#F3F0E6", "#202722", "#2B675B", "#B57A2A", "#A3453F"],
+      "materials": ["耐候外业纸", "石墨基线", "黄铜测针", "红色校核章"],
+      "viewport": "左侧项目控制点索引，中央一张贯穿视口的导线记录把里程碑、任务和四个运行连成可核查路径，右侧显示审批与闭合差。",
+      "risk": "线性和坐标语言必须服务真实依赖关系，否则会退化成装饰图纸。",
+      "raised": [
+        {"from": "Cracktro 队列", "raise": "不依赖容器堆叠来表达层级；当前任务通过清晰前景与静止焦点胜出。"},
+        {"from": "夜航六表", "raise": "总览必须提供固定、可训练的扫描顺序，并先呈现趋势再触发告警。"},
+        {"from": "磁带容量", "raise": "并发槽位和路径预算必须显式显示硬容量，不能无声溢出。"}
+      ]
+    },
+    {
+      "id": "model-pick-r1",
+      "label": "逻辑分析仪时序纸",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "数字逻辑分析、触发条件与多通道时序",
+      "thesis": "四个 Agent 是共享时间轴上的独立通道，审批、工具调用和质量门都是可定位的边沿。",
+      "palette": ["#F5F6F3", "#17201C", "#266C5D", "#C58A2B", "#A54640"],
+      "materials": ["哑光仪器面板", "时序纸", "探头标签", "触发标记"],
+      "viewport": "项目健康固定在顶部，四条运行通道横向跨越中央，任务依赖和审批边沿与事件详情精确对齐，右侧是触发条件。",
+      "risk": "它对实时运行极强，但如果扩展不慎，项目规划与知识页会显得像监控仪器的附属页。"
+    },
+    {
+      "id": "challenger-cracktro",
+      "label": "深度队列",
+      "verdict": "competitive",
+      "lineage": "Cracktro 标题屏与前后景工作队列",
+      "thesis": "不用卡片或分隔线，工作仅凭深度、亮度和字距决定优先级。",
+      "palette": ["#050606", "#F1EEE5", "#A0A19D", "#D79A32"],
+      "materials": ["发光黑场", "灰尘层", "位图基线", "琥珀光标"],
+      "viewport": "当前工作稳定停在最亮前景，其他任务作为不同深度的连续基线穿过屏幕边缘，焦点冻结所有运动。",
+      "case": "它属于开发者文化并能清楚表达优先级，但对表单、审批和长文本的产品清晰度弱于测量记录。",
+      "risk": "低亮度和位图排版若处理不严谨，会同时损害可读性与无障碍。",
+      "hero": "https://impeccable.style/worlds/cards/operate-c-cracktro-scroller-queue-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/operate-c-cracktro-scroller-queue.webp"
+    },
+    {
+      "id": "challenger-sixpack",
+      "label": "夜航交叉检查",
+      "verdict": "competitive",
+      "lineage": "小型飞机夜航六表与固定扫视顺序",
+      "thesis": "每个仪表只负责一个可靠事实，开发者按固定路径完成健康交叉检查。",
+      "palette": ["#111513", "#F0F2E8", "#7EB99B", "#D69A38", "#B34B43"],
+      "materials": ["哑黑仪表板", "夜光刻度", "玻璃表面", "警示灯"],
+      "viewport": "六个关键健康事实固定成两排，下面才展开项目和运行明细；偏差先表现趋势，后进入告警。",
+      "case": "总览清晰度很强，但圆形仪表不适合多数任务数据，也容易变成装饰性 dashboard。",
+      "risk": "必须把仪表限制在真正连续的量值，否则熟悉感会变成错误的控件。",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-night-flight-six-pack-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/signals-instruments-night-flight-six-pack.webp"
+    },
+    {
+      "id": "challenger-jcard",
+      "label": "硬容量折页",
+      "verdict": "declined",
+      "lineage": "磁带 J-card、A/B 面与精确时长",
+      "thesis": "任务被装入两个有明确容量上限的工作面，任何溢出都必须重新编排。",
+      "palette": ["#F7F5EE", "#254E86", "#6F7472", "#BC3B32"],
+      "materials": ["横线内页", "圆珠笔", "铅笔暂记", "品牌色条"],
+      "viewport": "工作流按两个硬容量面分组，任务运行时长紧贴右边距，折页在小屏幕收成书脊索引。",
+      "case": "容量约束有价值，但音乐媒介与研发控制面缺少可信的长期关系。",
+      "kept": "保留它让并发与时间预算无法无声溢出的纪律。",
+      "risk": "手写与翻折会把严肃的运行证据变成日记风格。",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-cassette-j-card-hero.webp"
+    },
+    {
+      "id": "challenger-crouwel",
+      "label": "构造网格标本",
+      "verdict": "declined",
+      "lineage": "Wim Crouwel 构造网格与网格字形",
+      "thesis": "所有导航、数据和状态由同一可见网格构造，响应式变化以整格重排。",
+      "palette": ["#F6F7F4", "#1C2723", "#B8CFCA", "#24695A"],
+      "materials": ["构造网格", "网格字形", "发丝线", "单一强调面"],
+      "viewport": "可见网格覆盖整页，任务代码和项目结构按同一单位构成，只有活动工作流突破一条对角线。",
+      "case": "秩序清楚，但更像设计系统展示，不能自然解释审批、隔离和收据。",
+      "kept": "保留整格响应式和一套尺度贯穿全部页面的要求。",
+      "risk": "可见网格很容易压过实际工作内容。",
+      "hero": "https://impeccable.style/worlds/cards/crouwel-grid-specimen-hero.webp"
+    },
+    {
+      "id": "challenger-dive",
+      "label": "运行深潜剖面",
+      "verdict": "declined",
+      "lineage": "深潜剖面、转向深度与上升停留",
+      "thesis": "一次运行沿垂直深度推进，工具事件、压缩点和恢复义务都固定在准确阶段。",
+      "palette": ["#0C2031", "#DDE9E7", "#45B8C5", "#93AEB8"],
+      "materials": ["深海蓝层", "海雪颗粒", "深度轴", "照明标记"],
+      "viewport": "运行详情沿垂直剖面展开，审批和恢复点固定在事件深度，右侧同步显示结构化工具日志。",
+      "case": "单次运行叙事有力量，但无法承载全局项目控制。",
+      "kept": "保留长事件流中固定阶段、压缩点和恢复点的精确位置。",
+      "risk": "深色沉浸场景会削弱日常操作效率。",
+      "hero": "https://impeccable.style/worlds/cards/rivers-tides-ocean-depths-mesophotic-deep-dive-hero.webp"
+    },
+    {
+      "id": "challenger-cape",
+      "label": "约束变形面",
+      "verdict": "declined",
+      "lineage": "隐藏抽绳通道与受约束布面变形",
+      "thesis": "同一工作面通过一条约束线在计划、运行、审查和完成状态之间变形。",
+      "palette": ["#141817", "#D5A73A", "#4F5955", "#E9ECE6"],
+      "materials": ["哑黑丝面", "金色约束绳", "石墨缝线", "聚拢阴影"],
+      "viewport": "一条金色流程线拉动工作流从平面计划聚拢成受保护运行，再松开为完成收据。",
+      "case": "状态变换可记忆，但服装形态不能为密集表格和设置提供稳定操作语法。",
+      "kept": "保留由单一约束驱动全部状态变化的系统完整性。",
+      "risk": "布料模拟既昂贵又难以保证减弱动效和清晰语义。",
+      "hero": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-drawcord-transforming-cape-hero.webp"
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "buildPath": {"value": "code"},
+  "canon": true,
+  "canonCard": {
+    "label": "行业标准控制台",
+    "thesis": "采用成熟侧边栏、指标条、任务表和详情抽屉，并把细节做到完整。",
+    "palette": ["#FFFFFF", "#111827", "#2563EB", "#64748B", "#E2E8F0"],
+    "materials": ["干净网格", "标准面板", "语义状态色", "低对比度分隔线"],
+    "viewport": "左侧导航、顶部指标、中央任务表、右侧活动流，用户不需学习新语法。",
+    "risk": "可靠但难以形成 BA Agent 独有记忆，也容易与同类后台工具无法区分。"
+  },
+  "steer": true
+}

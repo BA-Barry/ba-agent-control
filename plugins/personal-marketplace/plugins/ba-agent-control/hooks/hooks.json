@@ -1,0 +1,138 @@
+{
+  "description": "BA Agent lifecycle context and defense-in-depth command policy.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5,
+            "statusMessage": "Loading BA Agent run policy",
+            "additionalContextLimit": 700
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5,
+            "additionalContextLimit": 700
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking BA Agent operation policy"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking BA Agent approval policy"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5,
+            "additionalContextLimit": 700
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "other",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_guard.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_guard.py\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

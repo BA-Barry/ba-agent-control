@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Review"
+  short_description: "Review BA Agent work against requirements and evidence."
+  default_prompt: "Use $ba-review to review this task for correctness, security, tests, and scope."

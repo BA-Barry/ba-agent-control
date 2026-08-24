@@ -1,0 +1,25 @@
+{
+  "name": "ba-agent-control",
+  "version": "0.1.0-alpha.1",
+  "description": "Local-first project control workflows, guarded lifecycle hooks, and BA Agent MCP tools.",
+  "author": {
+    "name": "BA Agent contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "BA Agent",
+    "shortDescription": "Control local agent work with evidence and approvals.",
+    "longDescription": "Plan, dispatch, review, and recover local Codex work through BA Agent while keeping risky operations approval-gated.",
+    "developerName": "BA Agent contributors",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Use BA Agent to inspect this project's health and recommend the next safe action.",
+      "Use BA Agent to turn this request into dependency-aware tasks."
+    ],
+    "brandColor": "#465E84"
+  },
+  "mcpServers": "./.mcp.json",
+  "license": "Apache-2.0",
+  "keywords": ["codex", "local-first", "workflow", "quality-gates"]
+}

@@ -1,0 +1,129 @@
+{
+  "title": "为 BA Agent 选择长期视觉语法",
+  "question": "功能范围已经固定。请选择控制台最应该像哪一种熟悉的工作物件；也可以重抽或采用行业标准。",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "精密工单与检验台",
+      "kicker": "THE ROLL",
+      "lineage": "机加工工单、首件检验单与量具台",
+      "thesis": "把每个研发任务当成沿工位流转、逐门检验并最终留档的精密工单。",
+      "palette": ["#F4F2EA", "#202521", "#2F6F62", "#D5942B", "#B44A3C"],
+      "materials": ["亚麻增强工单纸", "阳极氧化铝导轨", "检验章墨", "精密刻度线"],
+      "viewport": "左侧是窄工具架导航，顶部是一条里程碑量规，中央工作流以一张贯穿视口的大工单展开，右缘夹着待审批票据。",
+      "risk": "材料表现过重会变成复古拟物；必须让熟悉控件、表格语义和操作速度先于质感。",
+      "raised": [
+        {"from": "工业标签", "raise": "所有危险与受保护状态都使用毫不含糊的字面标签和单一强标记。"},
+        {"from": "云采石场", "raise": "worktree 隔离必须在空间关系上可见，而不只是一列文字。"},
+        {"from": "公共事务简报", "raise": "高密度区域之间保留真正安静的留白，并限制为同一字体的两个主要字重。"}
+      ]
+    },
+    {
+      "id": "model-pick",
+      "label": "补丁账簿",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "Git patch stack、变更账簿与索引分页",
+      "thesis": "把计划、运行与收据组织成一册可翻查、可追溯的补丁账簿。",
+      "palette": ["#EEEDE7", "#1E2320", "#315D9B", "#7A817C", "#C47A32"],
+      "materials": ["薄型账簿纸", "蓝色修订铅笔", "索引签", "装订线"],
+      "viewport": "左侧索引签切换项目，中央以 working、review、accepted 三栏展开真实任务记录，底部连续露出事件账页。",
+      "risk": "这是开发工具最熟悉也最容易落入的方向，完成度不足时会像普通 Git 客户端。"
+    },
+    {
+      "id": "challenger-tdr",
+      "label": "注册噪声控制台",
+      "verdict": "competitive",
+      "lineage": "The Designers Republic 信息密度与登记标记",
+      "thesis": "把任务代码、审批级别和收据哈希压成一套极其严谨的登记标记系统。",
+      "palette": ["#050505", "#F5F5F1", "#ED3B8F", "#FF7A21"],
+      "materials": ["平面丝网印刷", "登记十字", "条码碎片", "安全标识"],
+      "viewport": "黑底上以紧密网格铺开四个并发运行，超大任务代码稳住视线，审批与质量状态被登记标记锁定。",
+      "case": "开发者能立刻识别它的技术文化，但高噪声会降低日常操作清晰度，因此只在受控密度下有竞争力。",
+      "risk": "装饰层一旦超过信息层，就会使审批和失败恢复变慢。",
+      "hero": "https://impeccable.style/worlds/cards/tdr-info-noise-sleeve-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/tdr-info-noise-sleeve.webp"
+    },
+    {
+      "id": "challenger-hypercard",
+      "label": "可编排卡栈",
+      "verdict": "competitive",
+      "lineage": "HyperCard 黑白卡栈与浏览/编辑同体",
+      "thesis": "每个项目、任务和运行都是可寻址卡片，查看与编排仅隔一个模式切换。",
+      "palette": ["#FFFFFF", "#111111", "#B8B8B8", "#365FA0"],
+      "materials": ["一位像素图", "点阵灰", "固定卡框", "反相按键"],
+      "viewport": "一个主卡栈占据工作区，项目轨迹在左、上下文工具在右，活动任务以反相边框进入编辑态。",
+      "case": "它强烈属于开发者文化并能解释可编排性，但固定卡片不擅长承载全局项目与并发状态。",
+      "risk": "黑白怀旧感可能压过无障碍状态色与现代响应式需求。",
+      "hero": "https://impeccable.style/worlds/cards/medium-native-hypercard-stack-shoebox-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/medium-native-hypercard-stack-shoebox.webp"
+    },
+    {
+      "id": "challenger-splitflap",
+      "label": "并发调度翻牌板",
+      "verdict": "competitive",
+      "lineage": "车站分列式翻牌与固定列调度",
+      "thesis": "把四个 Agent 的状态当成同一时刻表上的实时实体，变化逐列落位。",
+      "palette": ["#121414", "#F2F2EC", "#DCA93A", "#9E3E3B", "#89918E"],
+      "materials": ["哑黑翻牌", "拉丝钢框", "琥珀状态灯", "固定字符格"],
+      "viewport": "运行行占据中央整面调度板，列固定为任务、角色、worktree、门禁和下一动作，项目健康沿顶端常驻。",
+      "case": "实时运行状态非常清楚，但项目规划、配置和收据等静态任务会被单一时刻表语法限制。",
+      "risk": "大面积黑色与逐字符动效会给长时间使用带来疲劳。",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-split-flap-concourse-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/signals-instruments-split-flap-concourse.webp"
+    },
+    {
+      "id": "challenger-streetwear",
+      "label": "工业标签系统",
+      "verdict": "declined",
+      "lineage": "工业服装的字面标签与安全标识",
+      "thesis": "每个区域直呼其名，活动项保留橙色安全签。",
+      "palette": ["#F7F6F2", "#111111", "#F36A22", "#B9B9B5"],
+      "materials": ["白棉", "黑尼龙", "橙色束带", "斜纹警示"],
+      "viewport": "项目和状态被大写字面标签分区，唯一活动任务挂着橙色标记。",
+      "case": "标签清楚，但服装文化与个人研发控制面缺少直接关系。",
+      "kept": "保留它对危险状态的字面明确性和唯一强活动标记。",
+      "risk": "斜纹和引号很快会从结构退化为装饰。",
+      "hero": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-industrial-quote-grammar-hero.webp"
+    },
+    {
+      "id": "challenger-cloud",
+      "label": "云体隔离工场",
+      "verdict": "declined",
+      "lineage": "被切割、搬运和组装的天气块",
+      "thesis": "把 worktree 视为可分离、可合并、会释放的空间块。",
+      "palette": ["#EEF4F5", "#78B9DA", "#485660", "#B9C4C9"],
+      "materials": ["云体切面", "天空空腔", "银色锯线", "雾化边缘"],
+      "viewport": "仓库被切成悬浮 worktree 块，运行事件沿搬运轨迹移动。",
+      "case": "隔离概念形象，但对审批、表格和故障恢复几乎没有现成操作语法。",
+      "kept": "保留它把隔离关系做成空间事实的要求。",
+      "risk": "视觉隐喻会让频繁操作和辅助技术变得困难。",
+      "hero": "https://impeccable.style/worlds/cards/dream-surreal-impossible-worlds-cloud-quarry-hero.webp"
+    },
+    {
+      "id": "challenger-civic",
+      "label": "晚期现代事务简报",
+      "verdict": "declined",
+      "lineage": "公共事务简报的留白、丝带和双字重秩序",
+      "thesis": "用大面积安静底色与一条连续状态带统领所有工作。",
+      "palette": ["#F7F7FA", "#1B1547", "#6B5CE7", "#7FD8D0", "#E6E7EE"],
+      "materials": ["骨白板面", "渲染丝带", "灰色发丝线", "漆面台座"],
+      "viewport": "进度丝带贯穿顶部，项目健康与待办沿 1180px 轨道分带展开。",
+      "case": "清晰度不错，但更像对外传播页面，不像开发者日常掌控高风险运行的工具。",
+      "kept": "保留它的留白纪律、有限字重和克制运动。",
+      "risk": "容易把真实操作面板稀释成精美但被动的简报。",
+      "hero": "https://impeccable.style/worlds/cards/civic-bureau-prospectus-late-modern-hero.webp"
+    }
+  ],
+  "reroll": {"registers": ["safer", "bolder"]},
+  "buildPath": {"value": "code"},
+  "canon": true,
+  "canonCard": {
+    "label": "行业标准控制台",
+    "thesis": "采用成熟的侧边栏、指标条、任务表和详情抽屉，并把细节做到完整。",
+    "palette": ["#FFFFFF", "#111827", "#2563EB", "#64748B", "#E2E8F0"],
+    "materials": ["干净网格", "标准面板", "语义状态色", "低对比度分隔线"],
+    "viewport": "左侧导航、顶部指标、中央任务表、右侧活动流，用户不需学习新语法。",
+    "risk": "可靠但难以形成 BA Agent 独有记忆，也容易与同类后台工具无法区分。"
+  },
+  "steer": true
+}

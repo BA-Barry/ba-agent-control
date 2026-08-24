@@ -1,0 +1,4 @@
+interface:
+  display_name: "BA Plan"
+  short_description: "Create an executable BA Agent task plan."
+  default_prompt: "Use $ba-plan to break this change into dependency-aware BA Agent tasks."
