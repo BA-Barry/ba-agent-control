@@ -13,7 +13,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Control runs, approvals, gates, and receipts through the loopback HTTP/SSE API and MCP tools.
 - Probe GitHub credentials safely and inspect repository metadata without enabling remote writes.
 - Generate Codex and Claude-compatible project configuration without overwriting user-owned content.
-- Import runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.
+- Import and safely restore runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.
 
 The seven-surface bilingual console is not implemented yet. Its visual direction is fixed to “测量员外业簿”, but implementation remains behind the approved comp-first gate: three comps must be generated and one selected first. The current embedded console is only an unstyled bootstrap notice.
 
@@ -43,7 +43,7 @@ cargo test --workspace
 pnpm validate
 ```
 
-See [Architecture](docs/architecture.md), [Runtime compatibility](docs/runtime-compatibility.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [Architecture](docs/architecture.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## License
 

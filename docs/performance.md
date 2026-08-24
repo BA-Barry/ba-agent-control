@@ -37,3 +37,15 @@ The reproducible local script `scripts/measure-local-performance.ps1` measured t
 The rebuilt Windows x64 GNU artifact remains a single executable and is 11.58 MB (12,141,056 bytes). `doctor` returned `ready`, verified Codex 0.130.0 and SQLite integrity, and safely reported the absent optional GitHub credentials without exposing token material.
 
 The very first launch immediately after relinking the PE took 1,388.962 ms, while the next three launches each used a separate fresh data directory and stayed below 617 ms. This is consistent with a one-time artifact scan/cache effect but is not proven; clean-machine release-candidate testing must treat first-ever launch as an open performance risk rather than discarding the outlier.
+
+## 2026-08-24 — Current M5/self-hosting rebuild
+
+The release artifact was rebuilt after runtime-state evidence restoration and the first self-hosting hardening pass. It is a single 11.70 MiB executable (12,270,080 bytes); `doctor` returned `ready`, database integrity `ok`, and Codex CLI 0.130.0.
+
+| Budget | Measurement | Result |
+| --- | ---: | --- |
+| Core cold start to listening address `< 1 s` | Three fresh-data launches: 567.658 ms, 522.592 ms, and 507.773 ms | Pass; clean-machine first-launch risk remains open |
+| Common local API p95 `< 100 ms` | Three 100-request samples: p95 5.064 ms, 4.177 ms, and 4.102 ms | Pass |
+| Core idle memory `< 100 MB` | 13.16–13.33 MiB working set | Pass |
+
+An earlier first launch during the same hardening pass took 1,339.546 ms immediately after relinking, so the first-ever startup risk is not closed even though the final artifact's three measured launches passed. The final artifact's first sample also contained one 107.168 ms API maximum while its p95 remained 5.064 ms; the following samples had maxima of 7.050 ms and 13.067 ms. Public Beta must repeat this measurement on clean Windows, Ubuntu, and macOS hosts and investigate both first-ever startup and isolated API outliers.

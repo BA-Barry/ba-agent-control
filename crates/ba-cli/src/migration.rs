@@ -329,7 +329,7 @@ fn import_runtime_state(
         .join(&snapshot.runtime)
         .join(format!("{digest}.json"));
     ensure_safe_relative(&relative_path)?;
-    let destination = project_root.join(&relative_path);
+    let destination = guarded_project_destination(&project_root, &relative_path, false)?;
     let warnings = vec![
         "Imported status is immutable evidence and does not mutate BA Agent task or run state."
             .into(),
@@ -343,6 +343,15 @@ fn import_runtime_state(
             artifact.kind == "runtime_state_import" && artifact.digest.as_deref() == Some(&digest)
         })
     {
+        let (outcome, receipt_id) = reconcile_existing_runtime_snapshot(
+            &store,
+            &project_root,
+            &relative_path,
+            &snapshot,
+            &canonical,
+            &existing,
+            apply,
+        )?;
         return app::emit(
             &RuntimeStateImportReport {
                 mode: if apply { "apply" } else { "dry-run" },
@@ -352,9 +361,9 @@ fn import_runtime_state(
                 digest,
                 task_count: snapshot.tasks.len(),
                 run_count: snapshot.runs.len(),
-                outcome: "unchanged".into(),
+                outcome: outcome.into(),
                 artifact_id: Some(existing.id),
-                receipt_id: None,
+                receipt_id,
                 warnings,
             },
             json_output,
@@ -381,8 +390,8 @@ fn import_runtime_state(
     let (artifact_id, receipt_id) = persist_runtime_snapshot(
         &store,
         &project_id,
+        &project_root,
         &relative_path,
-        &destination,
         &snapshot,
         &canonical,
         &digest,
@@ -392,6 +401,62 @@ fn import_runtime_state(
     report.artifact_id = Some(artifact_id);
     report.receipt_id = Some(receipt_id);
     app::emit(&report, json_output)
+}
+
+fn reconcile_existing_runtime_snapshot(
+    store: &ba_store::SqliteStore,
+    project_root: &Path,
+    relative_path: &Path,
+    snapshot: &RuntimeStateSnapshot,
+    canonical: &str,
+    existing: &Artifact,
+    apply: bool,
+) -> anyhow::Result<(&'static str, Option<EntityId>)> {
+    let expected_path = relative_path.to_string_lossy().replace('\\', "/");
+    if existing.path != expected_path {
+        bail!(
+            "existing runtime state artifact path does not match its digest target: {}",
+            existing.path
+        );
+    }
+    let destination = guarded_project_destination(project_root, relative_path, false)?;
+    let rendered = format!("{canonical}\n");
+    if destination.exists() {
+        if fs::read_to_string(&destination)? != rendered {
+            bail!(
+                "runtime state destination exists with different content: {}",
+                destination.display()
+            );
+        }
+        return Ok(("unchanged", None));
+    }
+    if !apply {
+        return Ok(("would-restore", None));
+    }
+
+    let destination = guarded_project_destination(project_root, relative_path, true)?;
+    write_new_file(&destination, &rendered)?;
+    let receipt = store.append_receipt(
+        &existing.project_id,
+        None,
+        None,
+        "runtime_state_import_restored",
+        json!({
+            "artifactId": existing.id,
+            "runtime": snapshot.runtime,
+            "digest": existing.digest,
+            "path": expected_path,
+        }),
+    );
+    let receipt = match receipt {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let _ignored = fs::remove_file(&destination);
+            return Err(error.into());
+        }
+    };
+    store.verify_receipt_chain(&existing.project_id)?;
+    Ok(("restored", Some(receipt.id)))
 }
 
 fn load_runtime_snapshot(
@@ -420,32 +485,24 @@ fn load_runtime_snapshot(
 fn persist_runtime_snapshot(
     store: &ba_store::SqliteStore,
     project_id: &EntityId,
+    project_root: &Path,
     relative_path: &Path,
-    destination: &Path,
     snapshot: &RuntimeStateSnapshot,
     canonical: &str,
     digest: &str,
 ) -> anyhow::Result<(EntityId, EntityId)> {
     let rendered = format!("{canonical}\n");
+    let destination = guarded_project_destination(project_root, relative_path, true)?;
     let mut created_file = false;
     if destination.exists() {
-        if fs::read_to_string(destination)? != rendered {
+        if fs::read_to_string(&destination)? != rendered {
             bail!(
                 "runtime state destination exists with different content: {}",
                 destination.display()
             );
         }
     } else {
-        let parent = destination
-            .parent()
-            .context("runtime state destination has no parent")?;
-        fs::create_dir_all(parent)?;
-        let temporary = parent.join(format!(".{}.tmp", EntityId::new()));
-        fs::write(&temporary, &rendered)?;
-        if let Err(error) = fs::rename(&temporary, destination) {
-            let _ignored = fs::remove_file(&temporary);
-            return Err(error.into());
-        }
+        write_new_file(&destination, &rendered)?;
         created_file = true;
     }
     let artifact = Artifact {
@@ -474,11 +531,85 @@ fn persist_runtime_snapshot(
         Ok(receipt) => Ok((artifact.id, receipt.id)),
         Err(error) => {
             if created_file {
-                let _ignored = fs::remove_file(destination);
+                let _ignored = fs::remove_file(&destination);
             }
             Err(error.into())
         }
     }
+}
+
+fn write_new_file(destination: &Path, contents: &str) -> anyhow::Result<()> {
+    let parent = destination
+        .parent()
+        .context("runtime state destination has no parent")?;
+    let temporary = parent.join(format!(".{}.tmp", EntityId::new()));
+    fs::write(&temporary, contents)?;
+    if let Err(error) = fs::rename(&temporary, destination) {
+        let _ignored = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn guarded_project_destination(
+    project_root: &Path,
+    relative_path: &Path,
+    create_parents: bool,
+) -> anyhow::Result<PathBuf> {
+    ensure_safe_relative(relative_path)?;
+    let file_name = relative_path
+        .file_name()
+        .context("runtime state destination has no file name")?;
+    let parent = relative_path
+        .parent()
+        .context("runtime state destination has no parent")?;
+    let mut current = project_root.to_path_buf();
+    for component in parent.components() {
+        let Component::Normal(name) = component else {
+            bail!("unsafe generated path: {}", relative_path.display());
+        };
+        let candidate = current.join(name);
+        if candidate.exists() {
+            let metadata = fs::symlink_metadata(&candidate)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                bail!(
+                    "runtime state parent must be a real directory inside the project: {}",
+                    candidate.display()
+                );
+            }
+            let resolved = candidate.canonicalize()?;
+            if !resolved.starts_with(project_root) {
+                bail!(
+                    "runtime state path escapes the project root: {}",
+                    candidate.display()
+                );
+            }
+            current = resolved;
+        } else {
+            if create_parents {
+                fs::create_dir(&candidate)?;
+            }
+            current = candidate;
+        }
+    }
+    let destination = current.join(file_name);
+    if destination.exists() {
+        let metadata = fs::symlink_metadata(&destination)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!(
+                "runtime state destination must be a regular file: {}",
+                destination.display()
+            );
+        }
+        let resolved = destination.canonicalize()?;
+        if !resolved.starts_with(project_root) {
+            bail!(
+                "runtime state path escapes the project root: {}",
+                destination.display()
+            );
+        }
+    }
+    Ok(destination)
 }
 
 fn validate_runtime_snapshot(snapshot: &RuntimeStateSnapshot) -> anyhow::Result<()> {
@@ -691,6 +822,73 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].hash, receipt_hash);
         store.verify_receipt_chain(&project.id)?;
+
+        let artifact = store.list_artifacts(&project.id)?.remove(0);
+        let imported_path = project_root.path().join(&artifact.path);
+        assert!(imported_path.starts_with(project_root.path()));
+        fs::remove_file(&imported_path)?;
+        assert!(!imported_path.exists());
+
+        import_runtime_state(&paths, &snapshot_path, project.id.as_str(), false, true)?;
+        assert!(!imported_path.exists());
+        assert_eq!(store.list_receipts(&project.id)?.len(), 1);
+
+        import_runtime_state(&paths, &snapshot_path, project.id.as_str(), true, true)?;
+        assert!(imported_path.is_file());
+        assert_eq!(store.list_artifacts(&project.id)?.len(), 1);
+        let receipts = store.list_receipts(&project.id)?;
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[1].kind, "runtime_state_import_restored");
+        assert_eq!(receipts[1].payload["artifactId"], artifact.id.as_str());
+        store.verify_receipt_chain(&project.id)?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_state_destination_rejects_non_directory_parent() -> anyhow::Result<()> {
+        let project_root = tempfile::tempdir()?;
+        fs::write(project_root.path().join(".ba-agent"), "not a directory")?;
+        let result = guarded_project_destination(
+            project_root.path(),
+            Path::new(".ba-agent/imports/runtime-state/claude/state.json"),
+            true,
+        );
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_state_restore_rejects_mismatched_artifact_path() -> anyhow::Result<()> {
+        let project_root = tempfile::tempdir()?;
+        let data = tempfile::tempdir()?;
+        let paths = app::DataPaths::resolve(Some(data.path().to_path_buf()))?;
+        let snapshot = RuntimeStateSnapshot {
+            schema_version: 1,
+            runtime: "claude".into(),
+            captured_at: "2026-08-24T09:00:00Z".into(),
+            tasks: Vec::new(),
+            runs: Vec::new(),
+        };
+        let artifact = Artifact {
+            id: EntityId::new(),
+            project_id: EntityId::new(),
+            task_id: None,
+            run_id: None,
+            kind: "runtime_state_import".into(),
+            path: ".ba-agent/imports/runtime-state/claude/other.json".into(),
+            digest: Some("digest".into()),
+            created_at: now(),
+        };
+        let result = reconcile_existing_runtime_snapshot(
+            &paths.store()?,
+            project_root.path(),
+            Path::new(".ba-agent/imports/runtime-state/claude/state.json"),
+            &snapshot,
+            "{}",
+            &artifact,
+            false,
+        );
+        assert!(result.is_err());
         Ok(())
     }
 

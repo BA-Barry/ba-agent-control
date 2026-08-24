@@ -40,6 +40,9 @@ All seven surfaces, Chinese/English, light/dark/system themes, responsive and ac
 
 Status: **waiting at the comp-first decision gate**. No designed console surface has been implemented.
 
+- Self-hosting has begun with the repository registered in BA Agent and a `personal-alpha` workstream containing the visual gate, console, release, and hardening tasks.
+- The first real Reviewer run used Codex App Server and produced 470 structured events. Fourteen read-only Windows commands were approved individually; rejecting an unsafe destructive reproduction command correctly preserved the repository but currently failed the whole run. The approval-noise/recovery issue is tracked in the self-hosted backlog.
+
 ## M5 — Claude compatibility and migration
 
 Canonical config generation, Claude compatibility report, TheAgency dry-run/import, and runtime-neutral receipt validation.
@@ -49,6 +52,7 @@ Status: **complete locally (2026-08-24)**.
 - One canonical plugin source renders Codex and Claude instructions, eight roles, 11 Skills, Hooks, and the shared guard without overwriting user-owned content.
 - A structured compatibility report explicitly distinguishes Claude configuration support from unsupported live dispatch, realtime events, and interactive approvals.
 - Runtime state snapshots default to dry-run and import as canonical, digest-addressed evidence; Artifact and Receipt records are atomic and the authoritative Task/Run state machines are not bypassed.
+- Missing digest-addressed evidence is now detected: dry-run reports `would-restore`, apply restores canonical content with a new repair Receipt, and guarded path traversal rejects unsafe parents or content conflicts.
 - The end-to-end CLI demonstration produced `configuration_only`, preserved 8 roles and 11 Skills, reported `would-create` before apply, created one Artifact and one Receipt, and verified the permanent receipt chain.
 
 ## M6 — Public Beta

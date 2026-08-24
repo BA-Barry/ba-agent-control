@@ -41,6 +41,8 @@ ba-agent-control --json migrate runtime-state `
   docs/fixtures/claude-runtime-state-v1.json <PROJECT_ID> --apply
 ```
 
-Dry-run performs all parsing, status, reference, project, path, and digest validation without writing. Apply canonicalizes the JSON, addresses the repository file by SHA-256, and creates an Artifact and forward-hash-chained Receipt in one SQLite transaction. Reimporting the same digest is idempotent.
+Dry-run performs all parsing, status, reference, project, path, and digest validation without writing. Apply canonicalizes the JSON, addresses the repository file by SHA-256, and creates an Artifact and forward-hash-chained Receipt in one SQLite transaction. Reimporting the same digest is idempotent when the evidence file is intact.
+
+If the database still contains the Artifact but the digest-addressed file is missing, dry-run reports `would-restore`. An explicit `--apply` recreates the canonical file, keeps the original Artifact identity, appends a `runtime_state_import_restored` Receipt, and verifies the full chain. A conflicting file, non-directory parent, symlinked parent, or path resolving outside the canonical project root is rejected.
 
 Imported status is evidence, not authority: it never changes an existing BA Agent Task or Run. Reconciliation into an authoritative workflow requires a later explicit design and approval rather than silently manufacturing lifecycle transitions.
