@@ -1,5 +1,4 @@
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import * as Tooltip from '@radix-ui/react-tooltip'
+import * as RadioGroup from '@radix-ui/react-radio-group'
 import {
   ArrowRight,
   CheckCircle,
@@ -38,11 +37,14 @@ import {
 } from '@tanstack/react-table'
 import clsx from 'clsx'
 import {
+  useCallback,
   createContext,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  useTransition,
   type ReactNode,
 } from 'react'
 
@@ -108,10 +110,96 @@ const navItems = [
   { to: '/settings', zh: '设置与适配器', en: 'Settings & adapters', icon: SlidersHorizontal, count: 'ST' },
 ] as const
 
+function DisplaySettingsControl() {
+  const text = useText()
+  const { language, setLanguage, theme, setTheme } = useUiSettings()
+  const [open, setOpen] = useState(false)
+  const controlRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!controlRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  const choose = (apply: () => void) => {
+    apply()
+    setOpen(false)
+    window.requestAnimationFrame(() => triggerRef.current?.focus())
+  }
+
+  return (
+    <div className="settings-control" ref={controlRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="icon-button"
+        aria-label={text('显示与语言设置', 'Display and language settings')}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="display-settings-panel"
+        title={text('显示与语言', 'Display and language')}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown') return
+          event.preventDefault()
+          setOpen(true)
+          window.requestAnimationFrame(() => controlRef.current?.querySelector<HTMLButtonElement>('[role="radio"]')?.focus())
+        }}
+      >
+        <SlidersHorizontal size={19} aria-hidden="true" />
+      </button>
+      <div
+        id="display-settings-panel"
+        className="settings-menu"
+        role="dialog"
+        aria-label={text('显示与语言', 'Display and language')}
+        hidden={!open}
+      >
+        <div className="settings-label" id="language-settings-label">{text('语言', 'Language')}</div>
+        <RadioGroup.Root
+          className="settings-radio-group"
+          aria-labelledby="language-settings-label"
+          value={language}
+          onValueChange={(value) => choose(() => setLanguage(value as Language))}
+        >
+          <RadioGroup.Item className="settings-choice" value="zh"><span aria-hidden="true" />中文<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="en"><span aria-hidden="true" />English<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+        </RadioGroup.Root>
+        <div className="settings-separator" role="separator" />
+        <div className="settings-label" id="theme-settings-label">{text('主题', 'Theme')}</div>
+        <RadioGroup.Root
+          className="settings-radio-group"
+          aria-labelledby="theme-settings-label"
+          value={theme}
+          onValueChange={(value) => choose(() => setTheme(value as ThemePreference))}
+        >
+          <RadioGroup.Item className="settings-choice" value="system"><Globe size={15} aria-hidden="true" />{text('跟随系统', 'System')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="light"><Sun size={15} aria-hidden="true" />{text('浅色', 'Light')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="dark"><Moon size={15} aria-hidden="true" />{text('深色', 'Dark')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+        </RadioGroup.Root>
+      </div>
+    </div>
+  )
+}
+
 function AppShell() {
   const text = useText()
   const { data, isLoading } = useConsoleSnapshot()
-  const { language, setLanguage, theme, setTheme } = useUiSettings()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const activeItem = navItems.find((item) => item.to === pathname) ?? navItems[0]
   const activeProject = data.projects[0]
@@ -190,32 +278,7 @@ function AppShell() {
             <span><small>{text('并发运行', 'Active runs')}</small><strong className="accent-brass mono">{data.metrics.runningRuns} / 4</strong></span>
             <span className="topbar-status"><small>{text('数据源', 'Data source')}</small><strong><i className="live-dot" />{data.source === 'live' ? 'LOCAL API' : 'DEMO'}</strong></span>
           </div>
-          <DropdownMenu.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <DropdownMenu.Trigger className="icon-button" aria-label={text('显示与语言设置', 'Display and language settings')}>
-                  <SlidersHorizontal size={19} aria-hidden="true" />
-                </DropdownMenu.Trigger>
-              </Tooltip.Trigger>
-              <Tooltip.Portal><Tooltip.Content className="tooltip" sideOffset={8}>{text('显示与语言', 'Display and language')}</Tooltip.Content></Tooltip.Portal>
-            </Tooltip.Root>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content className="settings-menu" align="end" sideOffset={8}>
-                <DropdownMenu.Label>{text('语言', 'Language')}</DropdownMenu.Label>
-                <DropdownMenu.RadioGroup value={language} onValueChange={(value) => setLanguage(value as Language)}>
-                  <DropdownMenu.RadioItem value="zh">中文<DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                  <DropdownMenu.RadioItem value="en">English<DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                </DropdownMenu.RadioGroup>
-                <DropdownMenu.Separator />
-                <DropdownMenu.Label>{text('主题', 'Theme')}</DropdownMenu.Label>
-                <DropdownMenu.RadioGroup value={theme} onValueChange={(value) => setTheme(value as ThemePreference)}>
-                  <DropdownMenu.RadioItem value="system"><Globe size={15} />{text('跟随系统', 'System')}<DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                  <DropdownMenu.RadioItem value="light"><Sun size={15} />{text('浅色', 'Light')}<DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                  <DropdownMenu.RadioItem value="dark"><Moon size={15} />{text('深色', 'Dark')}<DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator></DropdownMenu.RadioItem>
-                </DropdownMenu.RadioGroup>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <DisplaySettingsControl />
         </header>
         <main id="main-content" tabIndex={-1}>
           {isLoading && (
@@ -787,6 +850,10 @@ function initialLanguage(): Language {
 export function ConsoleApp() {
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState<ThemePreference>(initialTheme)
+  const [, startLanguageTransition] = useTransition()
+  const updateLanguage = useCallback((nextLanguage: Language) => {
+    startLanguageTransition(() => setLanguage(nextLanguage))
+  }, [startLanguageTransition])
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -807,7 +874,10 @@ export function ConsoleApp() {
     window.localStorage.setItem('ba-agent-language', language)
   }, [language])
 
-  const settings = useMemo(() => ({ language, setLanguage, theme, setTheme }), [language, theme])
+  const settings = useMemo(
+    () => ({ language, setLanguage: updateLanguage, theme, setTheme }),
+    [language, theme, updateLanguage],
+  )
 
-  return <UiSettingsContext.Provider value={settings}><QueryClientProvider client={queryClient}><Tooltip.Provider delayDuration={250}><RouterProvider router={router} /></Tooltip.Provider></QueryClientProvider></UiSettingsContext.Provider>
+  return <UiSettingsContext.Provider value={settings}><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></UiSettingsContext.Provider>
 }

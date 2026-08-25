@@ -26,7 +26,7 @@ test('switches the console language without losing navigation', async () => {
   const user = userEvent.setup()
   const view = render(<ConsoleApp />)
   await user.click(await within(view.container).findByRole('button', { name: '显示与语言设置' }))
-  await user.click(screen.getByRole('menuitemradio', { name: 'English' }))
+  await user.click(screen.getByRole('radio', { name: 'English' }))
   expect(await within(view.container).findByRole('heading', { name: 'Project traverse and current closure' })).toBeInTheDocument()
   expect(within(view.container).getByRole('navigation', { name: 'Primary navigation' })).toBeInTheDocument()
 })

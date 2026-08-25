@@ -194,6 +194,26 @@ test('keyboard users can skip directly to the main content', async ({ page }) =>
   await expect(page.locator('#main-content')).toBeFocused()
 })
 
+test('display settings supports keyboard selection and Escape focus return', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockDemoFallback(page)
+  await page.goto('/')
+  const trigger = page.getByRole('button', { name: '显示与语言设置' })
+  await trigger.focus()
+  await trigger.press('ArrowDown')
+  await expect(page.getByRole('dialog', { name: '显示与语言' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '中文' })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  const englishTrigger = page.getByRole('button', { name: 'Display and language settings' })
+  await expect(englishTrigger).toHaveAttribute('aria-expanded', 'false')
+  await expect(englishTrigger).toBeFocused()
+  await englishTrigger.press('Enter')
+  await expect(page.getByRole('dialog', { name: 'Display and language' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(englishTrigger).toHaveAttribute('aria-expanded', 'false')
+  await expect(englishTrigger).toBeFocused()
+})
+
 test('settings reports an installed but unauthenticated Codex CLI honestly', async ({ page }) => {
   await mockEmptyApi(page, 0, {
     available: false,
@@ -283,10 +303,11 @@ test('forced colors and 200% text keep the approval surface operable', async ({ 
 })
 
 test('production console stays within LCP, INP, and CLS budgets', { tag: '@performance' }, async ({ page }) => {
+  const cpuRate = Number.parseFloat(process.env.BA_E2E_CPU_RATE ?? '1')
   await seedSettings(page, 'zh', 'light')
   await mockDemoFallback(page)
   await page.addInitScript(() => {
-    const vitals = { lcp: 0, inp: 0, cls: 0 }
+    const vitals = { lcp: 0, inp: 0, cls: 0, interactions: [] as Array<{ name: string; duration: number; target: string }> }
     Object.defineProperty(window, '__baAgentVitals', { value: vitals, configurable: true })
     new PerformanceObserver((list) => {
       const entry = list.getEntries().at(-1)
@@ -300,8 +321,16 @@ test('production console stays within LCP, INP, and CLS budgets', { tag: '@perfo
     }).observe({ type: 'layout-shift', buffered: true })
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
-        const event = entry as PerformanceEntry & { interactionId?: number; duration: number }
-        if ((event.interactionId ?? 0) > 0) vitals.inp = Math.max(vitals.inp, event.duration)
+        const event = entry as PerformanceEntry & { interactionId?: number; duration: number; target?: EventTarget | null }
+        if ((event.interactionId ?? 0) > 0) {
+          vitals.inp = Math.max(vitals.inp, event.duration)
+          const target = event.target instanceof Element ? event.target : null
+          vitals.interactions.push({
+            name: event.name,
+            duration: event.duration,
+            target: target?.getAttribute('aria-label') ?? target?.textContent?.trim().slice(0, 48) ?? '',
+          })
+        }
       }
     }).observe({ type: 'event', buffered: true, durationThreshold: 16 })
   })
@@ -310,11 +339,15 @@ test('production console stays within LCP, INP, and CLS budgets', { tag: '@perfo
   await expect.poll(() => page.evaluate(() => (window as Window & {
     __baAgentVitals: { lcp: number }
   }).__baAgentVitals.lcp)).toBeGreaterThan(0)
+  if (Number.isFinite(cpuRate) && cpuRate > 1) {
+    const session = await page.context().newCDPSession(page)
+    await session.send('Emulation.setCPUThrottlingRate', { rate: cpuRate })
+  }
   await page.getByRole('button', { name: '显示与语言设置' }).click()
-  await page.getByRole('menuitemradio', { name: 'English' }).click()
+  await page.getByRole('radio', { name: 'English' }).click()
   await page.waitForTimeout(500)
   const vitals = await page.evaluate(() => (window as Window & {
-    __baAgentVitals: { lcp: number; inp: number; cls: number }
+    __baAgentVitals: { lcp: number; inp: number; cls: number; interactions: Array<{ name: string; duration: number; target: string }> }
   }).__baAgentVitals)
   console.log(`BA Agent Web Vitals: ${JSON.stringify(vitals)}`)
   expect(vitals.lcp).toBeGreaterThan(0)
