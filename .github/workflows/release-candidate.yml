@@ -65,6 +65,39 @@ jobs:
       - run: cargo clippy --workspace --all-targets --target ${{ matrix.rust_target }} -- -D warnings
       - run: cargo test --workspace --locked --target ${{ matrix.rust_target }}
       - run: cargo build --release --locked --target ${{ matrix.rust_target }} -p ba-agent-control
+      - name: Verify Windows performance budgets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $metrics = ./scripts/measure-local-performance.ps1 -Executable '${{ matrix.binary }}' -Samples 100 | ConvertFrom-Json
+          if ($metrics.coldStartMs -ge 1000) { throw "cold-start budget exceeded: $($metrics.coldStartMs) ms" }
+          if ($metrics.apiP95Ms -ge 100) { throw "API p95 budget exceeded: $($metrics.apiP95Ms) ms" }
+          if ($metrics.workingSetMiB -ge 100) { throw "idle-memory budget exceeded: $($metrics.workingSetMiB) MiB" }
+          $metrics | ConvertTo-Json -Compress
+      - name: Verify Unix performance budgets
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          metrics=$(sh scripts/measure-local-performance.sh '${{ matrix.binary }}' 100)
+          python3 - "$metrics" <<'PY'
+          import json
+          import sys
+
+          metrics = json.loads(sys.argv[1])
+          budgets = {
+              "coldStartMs": 1000,
+              "apiP95Ms": 100,
+              "workingSetMiB": 100,
+          }
+          exceeded = [
+              f"{name}={metrics[name]} (budget < {limit})"
+              for name, limit in budgets.items()
+              if metrics[name] >= limit
+          ]
+          if exceeded:
+              raise SystemExit("performance budget exceeded: " + ", ".join(exceeded))
+          print(json.dumps(metrics, separators=(",", ":")))
+          PY
       - name: Package Windows candidate
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,18 +1,27 @@
 use std::path::PathBuf;
 
-use ba_core::{EntityId, Receipt, TaskStatus, Worktree, WorktreeStatus, now};
+use ba_core::{EntityId, Gate, Receipt, Task, TaskStatus, Worktree, WorktreeStatus, now};
 use ba_git::{FinalizedWorktree, RepoPath, WorktreeHandle, WorktreeManager, WriteScope};
 use ba_store::SqliteStore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{GateEligibility, SchedulerError, configured_gate_names, evaluate_required_gates};
+use crate::{
+    GateEligibility, SchedulerError, configured_gate, configured_gate_names,
+    evaluate_required_gates,
+};
+
+#[derive(Debug, Deserialize)]
+struct RecordedGateCommand {
+    program: String,
+    args: Vec<String>,
+}
 
 /// Durable result of quality-gated local branch and commit creation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinalizationResult {
-    pub worktree: Worktree,
-    pub git: FinalizedWorktree,
+    pub worktree: Option<Worktree>,
+    pub git: Option<FinalizedWorktree>,
     pub receipt: Receipt,
 }
 
@@ -32,8 +41,9 @@ impl FinalizationCoordinator {
         }
     }
 
-    /// Finalize a write task only after every configured non-empty gate has passed.
-    /// Read tasks, incomplete gates, and already committed worktrees return `None`.
+    /// Complete a task only after every configured non-empty gate has passed.
+    /// Write tasks create a local branch/commit; read tasks create a permanent review receipt.
+    /// Incomplete gates and already finalized tasks return `None`.
     ///
     /// # Errors
     ///
@@ -48,7 +58,7 @@ impl FinalizationCoordinator {
             .store
             .get_task(task_id)?
             .ok_or_else(|| SchedulerError::NotSchedulable(format!("task {task_id} not found")))?;
-        if !task.write || task.status != TaskStatus::Review {
+        if task.status != TaskStatus::Review {
             return Ok(None);
         }
         let project = self.store.get_project(&task.project_id)?.ok_or_else(|| {
@@ -56,11 +66,15 @@ impl FinalizationCoordinator {
         })?;
         let project_root = PathBuf::from(&project.root_path).canonicalize()?;
         let required = configured_gate_names(&project_root)?;
+        let gates = self.store.list_gates(task_id)?;
         if required.is_empty()
-            || evaluate_required_gates(&self.store.list_gates(task_id)?, &required)
-                != GateEligibility::Eligible
+            || evaluate_required_gates(&gates, &required) != GateEligibility::Eligible
         {
             return Ok(None);
+        }
+        verify_recorded_gate_commands(&project_root, &gates, &required)?;
+        if !task.write {
+            return self.complete_read_review(task, run_id, &required).map(Some);
         }
         let mut worktree = self
             .store
@@ -127,11 +141,60 @@ impl FinalizationCoordinator {
             }),
         )?;
         Ok(Some(FinalizationResult {
-            worktree,
-            git: finalized,
+            worktree: Some(worktree),
+            git: Some(finalized),
             receipt,
         }))
     }
+
+    fn complete_read_review(
+        &self,
+        task: Task,
+        run_id: Option<&EntityId>,
+        required_gates: &[String],
+    ) -> Result<FinalizationResult, SchedulerError> {
+        self.store
+            .transition_task(&task.id, TaskStatus::Completed)?;
+        let receipt = self.store.append_receipt(
+            &task.project_id,
+            Some(task.id),
+            run_id.cloned(),
+            "quality_gated_read_review",
+            json!({ "requiredGates": required_gates }),
+        )?;
+        Ok(FinalizationResult {
+            worktree: None,
+            git: None,
+            receipt,
+        })
+    }
+}
+
+fn verify_recorded_gate_commands(
+    project_root: &std::path::Path,
+    gates: &[Gate],
+    required: &[String],
+) -> Result<(), SchedulerError> {
+    for name in required {
+        let gate = gates
+            .iter()
+            .filter(|gate| gate.name == *name)
+            .max_by(|left, right| left.created_at.cmp(&right.created_at))
+            .ok_or_else(|| {
+                SchedulerError::InvalidGate(format!("required gate is missing: {name}"))
+            })?;
+        let recorded = gate.command.as_deref().ok_or_else(|| {
+            SchedulerError::InvalidGate(format!("gate command is missing: {name}"))
+        })?;
+        let recorded = serde_json::from_str::<RecordedGateCommand>(recorded)?;
+        let configured = configured_gate(project_root, name)?;
+        if recorded.program != configured.program || recorded.args != configured.args {
+            return Err(SchedulerError::InvalidGate(format!(
+                "recorded gate command does not match project configuration: {name}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn branch_segment(value: &str) -> String {

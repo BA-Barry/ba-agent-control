@@ -28,6 +28,8 @@ sh ba-agent-package/install.sh rollback "$HOME/.local/bin"
 sh ba-agent-package/install.sh uninstall "$HOME/.local/bin"
 ```
 
+BA Agent reuses the Codex CLI session and never stores model credentials. Install Codex CLI 0.130.0 or newer, run `codex login`, and confirm the same native environment reports an authenticated runtime with `ba-agent-control doctor`. Windows and WSL2 have separate CLI installations and login state.
+
 On macOS, use `shasum -a 256` when `sha256sum` is unavailable. Replace the archive label with `macos-x64` or `macos-arm64` as appropriate.
 
 ## Data retention

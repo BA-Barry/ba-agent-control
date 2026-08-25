@@ -132,6 +132,7 @@ pub struct AppState {
     security: Arc<SessionSecurity>,
     events: broadcast::Sender<RunEvent>,
     worktree_root: PathBuf,
+    runtime: Arc<dyn RuntimeAdapter>,
     control: RuntimeCoordinator,
     github: GitHubAdapter,
 }
@@ -287,6 +288,7 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
         security,
         events,
         worktree_root: config.worktree_root,
+        runtime: runtime.clone(),
         control: control.clone(),
         github: GitHubAdapter::default(),
     };
@@ -1183,11 +1185,12 @@ async fn run_gate(
             .finalize_if_eligible(&task_id, run_id.as_ref())
             .map_err(ApiError::internal)?;
     if let (Some(run_id), Some(finalization)) = (&run_id, &finalization) {
-        let _event = state.append_event(
-            run_id,
-            "worktree.committed",
-            json!({"finalization": finalization}),
-        )?;
+        let event = if finalization.git.is_some() {
+            "worktree.committed"
+        } else {
+            "task.completed"
+        };
+        let _event = state.append_event(run_id, event, json!({"finalization": finalization}))?;
     }
     Ok(Json(json!({"gate": gate, "finalization": finalization})))
 }
@@ -1213,8 +1216,25 @@ async fn verify_receipts(
 
 async fn adapter_status(State(state): State<AppState>) -> Json<Value> {
     let github = state.github.probe().await;
+    let codex = match state.runtime.probe().await {
+        Ok(capabilities) => json!(capabilities),
+        Err(error) => json!({
+            "adapter": "codex",
+            "available": false,
+            "authenticated": false,
+            "version": null,
+            "minimum_version": ba_runtime::MINIMUM_CODEX_VERSION,
+            "app_server": false,
+            "exec_json_fallback": false,
+            "approvals": false,
+            "resume": false,
+            "guide": false,
+            "cancellation": false,
+            "degraded_reason": error.to_string(),
+        }),
+    };
     Json(json!({"adapters": [
-        {"id":"codex","minimumVersion":"0.130.0","preferredTransport":"app-server","fallbackTransport":"exec-json","credentialsStored":false},
+        {"id":"codex","minimumVersion":"0.130.0","preferredTransport":"app-server","fallbackTransport":"exec-json","credentialsStored":false,"capabilities":codex},
         {"id":"claude","mode":"configuration-only","liveDispatch":false},
         {"id":"github","mode":"optional-read-only","status":github}
     ]}))
@@ -1413,6 +1433,7 @@ mod tests {
             Ok(RuntimeCapabilities {
                 adapter: "mock".into(),
                 available: true,
+                authenticated: true,
                 version: Some(CodexVersion::new(0, 130, 0)),
                 minimum_version: MINIMUM_CODEX_VERSION,
                 app_server: true,
@@ -1489,19 +1510,31 @@ mod tests {
         let store = SqliteStore::open(directory.join("ba-agent.db"))?;
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41415);
         let (events, _receiver) = broadcast::channel(16);
-        let control = RuntimeCoordinator::with_event_sender(
-            store.clone(),
-            Arc::new(CodexAdapter::new("codex")),
-            events.clone(),
-        );
+        let runtime: Arc<dyn RuntimeAdapter> = Arc::new(MockRuntime::new());
+        let control =
+            RuntimeCoordinator::with_event_sender(store.clone(), runtime.clone(), events.clone());
         Ok(AppState {
             store,
             security: Arc::new(SessionSecurity::new(address)),
             events,
             worktree_root: directory.join("worktrees"),
+            runtime,
             control,
             github: GitHubAdapter::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn adapter_status_includes_live_runtime_authentication() -> anyhow::Result<()> {
+        let Json(body) = adapter_status(State(state()?)).await;
+        let codex = body
+            .pointer("/adapters/0/capabilities")
+            .ok_or_else(|| anyhow::anyhow!("Codex capabilities missing"))?;
+
+        assert_eq!(codex["available"], true);
+        assert_eq!(codex["authenticated"], true);
+        assert_eq!(codex["app_server"], true);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1891,6 +1924,7 @@ mod tests {
             security: Arc::new(SessionSecurity::new(address)),
             events,
             worktree_root: directory.join("worktrees"),
+            runtime: Arc::new(MockRuntime::new()),
             control,
             github: GitHubAdapter::default(),
         };
@@ -1990,6 +2024,7 @@ mod tests {
             security: Arc::new(SessionSecurity::new(address)),
             events: events.clone(),
             worktree_root: directory.join("worktrees"),
+            runtime: Arc::new(MockRuntime::new()),
             control: RuntimeCoordinator::with_event_sender(
                 store.clone(),
                 Arc::new(MockRuntime::new()),

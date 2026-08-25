@@ -334,13 +334,38 @@ async fn passed_configured_gates_finalize_local_commit_and_receipt()
         .await?;
     assert_eq!(gate.status, GateStatus::Passed);
 
+    let mut forged_gate = gate.clone();
+    forged_gate.command = Some(serde_json::to_string(&json!({
+        "program": "git",
+        "args": ["--version"]
+    }))?);
+    fixture.store.upsert_gate(&forged_gate)?;
+    assert!(
+        FinalizationCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
+            .finalize_if_eligible(&candidate.id, Some(&bundle.run.id))
+            .is_err(),
+        "a same-name gate with a different command bypassed finalization"
+    );
+    fixture.store.upsert_gate(&gate)?;
+
     let finalized =
         FinalizationCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
             .finalize_if_eligible(&candidate.id, Some(&bundle.run.id))?
             .ok_or_else(|| missing("eligible worktree was not finalized"))?;
-    assert!(finalized.git.branch.starts_with("ba/default/"));
+    assert!(
+        finalized
+            .git
+            .as_ref()
+            .ok_or_else(|| missing("finalized Git result missing"))?
+            .branch
+            .starts_with("ba/default/")
+    );
     assert_eq!(
-        finalized.worktree.status,
+        finalized
+            .worktree
+            .as_ref()
+            .ok_or_else(|| missing("finalized worktree result missing"))?
+            .status,
         ba_core::WorktreeStatus::Committed
     );
     assert_eq!(
@@ -353,6 +378,52 @@ async fn passed_configured_gates_finalize_local_commit_and_receipt()
     );
     fixture.store.verify_receipt_chain(&candidate.project_id)?;
     assert_eq!(fixture.store.list_receipts(&candidate.project_id)?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn passed_configured_gates_complete_read_review_with_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let repository = fixture.directory.path();
+    std::fs::create_dir_all(repository.join(".ba-agent"))?;
+    std::fs::write(
+        repository.join(".ba-agent/project.toml"),
+        "[gates]\ncheck = [\"git\", \"--version\"]\n",
+    )?;
+    let candidate = task(&fixture.project_id, "reader", false, &[]);
+    fixture.store.upsert_task(&candidate)?;
+    for status in [
+        TaskStatus::Ready,
+        TaskStatus::Queued,
+        TaskStatus::Running,
+        TaskStatus::Review,
+    ] {
+        fixture.store.transition_task(&candidate.id, status)?;
+    }
+    let definition = configured_gate(repository, "check")?;
+    let gate = GateCoordinator::new(fixture.store.clone())
+        .run(&candidate.id, None, repository, &definition)
+        .await?;
+    assert_eq!(gate.status, GateStatus::Passed);
+
+    let worktrees = tempfile::tempdir()?;
+    let finalized =
+        FinalizationCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
+            .finalize_if_eligible(&candidate.id, None)?
+            .ok_or_else(|| missing("eligible read review was not finalized"))?;
+    assert!(finalized.git.is_none());
+    assert!(finalized.worktree.is_none());
+    assert_eq!(finalized.receipt.kind, "quality_gated_read_review");
+    assert_eq!(
+        fixture
+            .store
+            .get_task(&candidate.id)?
+            .ok_or_else(|| missing("completed reader missing"))?
+            .status,
+        TaskStatus::Completed
+    );
+    fixture.store.verify_receipt_chain(&candidate.project_id)?;
     Ok(())
 }
 
@@ -611,6 +682,8 @@ async fn finalize_alpha_writers(
         assert!(
             finalized
                 .git
+                .as_ref()
+                .ok_or_else(|| missing("finalized Git result missing"))?
                 .branch
                 .starts_with(&format!("ba/alpha-{}/", ["a", "b", "c"][index]))
         );
@@ -970,6 +1043,7 @@ fn capabilities(resume: bool) -> RuntimeCapabilities {
     RuntimeCapabilities {
         adapter: "codex".to_owned(),
         available: true,
+        authenticated: true,
         version: Some(CodexVersion::new(0, 130, 0)),
         minimum_version: MINIMUM_CODEX_VERSION,
         app_server: true,

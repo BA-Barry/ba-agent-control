@@ -35,6 +35,11 @@ test('maps the authenticated local API into a live console snapshot', async () =
     if (url === '/api/v1/overview') return json({ projects: [project], pendingApprovals: 1, runningRuns: 1, failedRuns: 0, orphanedRuns: 0 })
     if (url === '/api/v1/agent-profiles') return json([{ id: run.agent_profile_id, name: 'Implementer', role: 'Implementer', runtime: 'codex' }])
     if (url === '/api/v1/approvals') return json([{ id: '01APPROVAL000000000000001', run_id: run.id, kind: 'git.push', status: 'pending', request: { branch: 'ba/live' }, requested_at: '2026-08-24T10:01:00Z' }])
+    if (url === '/api/v1/adapters') return json({ adapters: [{ id: 'codex', capabilities: {
+      available: true, authenticated: true, version: { major: 0, minor: 149, patch: 1 },
+      app_server: true, exec_json_fallback: true, approvals: true, resume: true,
+      guide: true, cancellation: true, degraded_reason: null,
+    } }] })
     if (url.startsWith('/api/v1/workstreams?')) return json([{ id: task.workstream_id, project_id: project.id, name: 'Console', description: '', status: 'active' }])
     if (url.startsWith('/api/v1/milestones?')) return json([{
       id: task.milestone_id, project_id: project.id, workstream_id: task.workstream_id,
@@ -70,6 +75,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
     eventSequence: 17,
   })
   expect(snapshot.approvals[0]).toMatchObject({ action: 'push', risk: 'medium' })
+  expect(snapshot.runtime).toMatchObject({ available: true, authenticated: true, version: '0.149.1', appServer: true })
   expect(snapshot.metrics).toMatchObject({ pendingApprovals: 1, runningRuns: 1, receiptCount: 1, receiptHead: 'abcdef1234567890' })
 })
 

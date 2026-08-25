@@ -13,12 +13,12 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 
 | Milestone | Status | Reproducible evidence | Remaining gate |
 | --- | --- | --- | --- |
-| M1 Foundation | Proven locally | Embedded single binary, SQLite migrations/integrity, plugin bundle, 3-OS CI definition, 86 non-model Rust tests and console suites | Hosted CI has not run without a user-approved remote |
+| M1 Foundation | Proven locally | Embedded single binary, SQLite migrations/integrity, plugin bundle, 3-OS CI definition, 92 Windows / 91 Linux non-model Rust tests and console suites | Hosted CI has not run without a user-approved remote |
 | M2 Core vertical slice | Proven locally | Transactional state tests, temporary Git/worktree tests, App Server fixture/live contract, gates, local commit, receipts, restart recovery | None for local Alpha |
-| M3 Complete Codex control | Proven locally | Four-agent live demonstration, concurrency limit, approvals, messages, Hooks, recovery, exec fallback, credential-safe GitHub adapter | None for local Alpha |
-| M4 Personal Alpha console | Proven locally except self-hosting streak | 20 Playwright/axe scenarios cover seven routes, desktop/Pixel 7, Chinese/English, light/dark, real milestone/task mutations, keyboard skip, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; 10 frontend unit tests cover localization and API mapping | Three consecutive successful self-hosted workflows are blocked by Codex usage quota |
+| M3 Complete Codex control | Proven locally | Live single-turn and four-parallel-Agent demonstrations, fifth-run capacity rejection, approvals, messages, Hooks, recovery, exec fallback, credential-safe GitHub adapter | None for local Alpha |
+| M4 Personal Alpha console | Proven locally | 22 Playwright/axe scenarios cover seven routes, desktop/Pixel 7, Chinese/English, light/dark, real milestone/task mutations, truthful runtime authentication/degradation, keyboard skip, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; three consecutive real self-hosted workflows survived intervening restarts with 84 ordered events, 18 passed gates and three chained receipts | None for local Alpha |
 | M5 Claude compatibility and migration | Proven locally | Canonical generator, checksum-managed merges, compatibility report, TheAgency dry-run/apply import, runtime-state evidence repair and hash-chain tests | Claude live dispatch is intentionally outside Alpha |
-| M6 Public Beta | Proven locally on Windows; pending external elsewhere | Notice-complete Windows archive, mandatory SHA-256 verification, install/upgrade/rollback/uninstall/data retention, malicious archive/checksum/reparse-point tests, performance samples | Four hosted targets, clean-machine startup, legal review, manual assistive-tech pass, and publication approval |
+| M6 Public Beta | Proven locally on Windows and WSL2 Linux; pending hosted/macOS certification | Notice-complete Windows and native Linux archives, mandatory SHA-256 verification, install/upgrade/rollback/uninstall/data retention, malicious archive/checksum/link tests, performance samples | Four hosted targets, clean-machine startup, legal review, manual assistive-tech pass, and publication approval |
 
 ## Requirement coverage
 
@@ -80,8 +80,8 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | Deterministic third-party inventory and full notices | Proven locally | 273 Rust and 63 runtime npm packages; 202 deduplicated documents; generation diff gate |
 | Windows archive and lifecycle | Proven locally | Exact eight-entry archive, checksum, install, upgrade, rollback, uninstall and retained SQLite data |
 | Malicious package rejection | Proven locally on Windows | Checksum mismatch, traversal archive and reparse-point installation tests |
-| Linux/macOS archives and lifecycle | Pending external | Manual release-candidate matrix is defined but has not run on hosted clean machines |
-| Core startup/API/memory budgets | Proven locally | Final Windows release samples: startup 624.765/126.408/134.076 ms, API p95 4.645/4.528/4.510 ms, memory 14.52–14.66 MiB; clean-host target certification remains pending |
+| Linux/macOS archives and lifecycle | Proven locally for Linux; pending external for macOS | Native WSL2 Linux build passed strict Clippy, 89 applicable non-model tests, packaging, checksum/traversal/symlink rejection, lifecycle and performance budgets; macOS still requires hosted native runners |
+| Core startup/API/memory budgets | Proven locally | Final Windows release samples: startup 827.557/142.794/183.179 ms, API p95 6.441/6.336/6.555 ms, memory 14.53–14.57 MiB; clean-host target certification remains pending |
 | UI LCP/INP/CLS budgets | Proven locally | Production-build observations stayed within budget: desktop LCP 452–616 ms / INP 72–96 ms / CLS 0–0.0226; Pixel 7 LCP 392–504 ms / INP 56–80 ms / CLS 0; clean-host target certification remains pending |
 | No P0/P1 defects | Pending release audit | Current local automated suites pass, but hosted candidates and manual assistive-tech validation are outstanding |
 
@@ -89,14 +89,13 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 
 The complete non-model acceptance scenario is proven locally by `alpha_acceptance_survives_four_way_dispatch_restart_and_retention`. In one continuous test it registers three real temporary Git repositories, models a completed dependency, admits four different agent profiles, rejects a fifth run at the concurrency limit, isolates three write tasks in distinct worktrees, pauses and resumes a protected push approval, passes configured gates, creates three `ba/<workstream>/<task-id>` branches and receipts, reopens SQLite, resumes a persisted reader thread after orphan recovery, then applies a future 90-day runtime-data cutoff and verifies that all three receipt chains survive another reopen.
 
-This deterministic test proves orchestration and persistence without consuming model quota. It does not claim three uninterrupted real-model self-hosted successes; those remain the stronger Alpha release gate.
+This deterministic test proves orchestration and persistence without consuming model quota. It is now supplemented by three consecutive real-model self-hosted successes, each with a completed Task, succeeded Run, six configured gate passes, permanent receipt, and post-restart verification.
 
 ## Remaining blockers and next actions
 
-1. After the Codex weekly quota resets, run three consecutive self-hosted workflows and retain task/run/event/gate/receipt evidence for each.
-2. With explicit user authorization, create or select a remote repository and execute the four-target release-candidate workflow.
-3. On clean candidates, record first-ever startup plus UI LCP, INP and CLS; investigate any budget miss instead of discarding the first sample.
-4. Complete manual screen-reader, native Windows high-contrast and browser 200% zoom checks, then perform the release-owner third-party license review.
-5. Only after those gates pass, request separate approval for tags, GitHub Release or public archives.
+1. With explicit user authorization, create or select a remote repository and execute the four-target release-candidate workflow.
+2. On clean candidates, record first-ever startup plus UI LCP, INP and CLS; investigate any budget miss instead of discarding the first sample.
+3. Complete manual screen-reader, native Windows high-contrast and browser 200% zoom checks, then perform the release-owner third-party license review.
+4. Only after those gates pass, request separate approval for tags, GitHub Release or public archives.
 
 No remote repository, credential registration, tag, release, push, merge or deployment is authorized by this audit.

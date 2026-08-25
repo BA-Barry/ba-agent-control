@@ -137,6 +137,8 @@ pub enum RuntimeTransport {
 pub struct RuntimeCapabilities {
     pub adapter: String,
     pub available: bool,
+    #[serde(default)]
+    pub authenticated: bool,
     pub version: Option<CodexVersion>,
     pub minimum_version: CodexVersion,
     pub app_server: bool,
@@ -589,6 +591,7 @@ impl RuntimeAdapter for CodexAdapter {
             return Ok(RuntimeCapabilities {
                 adapter: "codex".into(),
                 available: false,
+                authenticated: false,
                 version: Some(version),
                 minimum_version: MINIMUM_CODEX_VERSION,
                 app_server: false,
@@ -602,11 +605,36 @@ impl RuntimeAdapter for CodexAdapter {
                 )),
             });
         }
-        let app_server_output = self.command_output(&["app-server", "--help"]).await?;
-        let app_server = app_server_output.status.success();
+        let (app_server_result, login_result) = tokio::join!(
+            self.command_output(&["app-server", "--help"]),
+            self.command_output(&["login", "status"]),
+        );
+        let app_server = app_server_result.is_ok_and(|output| output.status.success());
+        let (authenticated, authentication_error) = match login_result {
+            Ok(output) => (output.status.success(), None),
+            Err(error) => (false, Some(error.to_string())),
+        };
+        let degraded_reason = if !authenticated {
+            Some(authentication_error.map_or_else(
+                || "Codex CLI is not authenticated; run codex login".to_owned(),
+                |error| {
+                    format!(
+                        "Codex CLI authentication could not be verified ({error}); run codex login"
+                    )
+                },
+            ))
+        } else if !app_server {
+            Some(
+                "App Server unavailable; using codex exec --json with no live approval or guidance channel"
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
         Ok(RuntimeCapabilities {
             adapter: "codex".into(),
-            available: true,
+            available: authenticated,
+            authenticated,
             version: Some(version),
             minimum_version: MINIMUM_CODEX_VERSION,
             app_server,
@@ -615,10 +643,7 @@ impl RuntimeAdapter for CodexAdapter {
             resume: true,
             guide: app_server,
             cancellation: true,
-            degraded_reason: (!app_server).then(|| {
-                "App Server unavailable; using codex exec --json with no live approval or guidance channel"
-                    .to_owned()
-            }),
+            degraded_reason,
         })
     }
 
@@ -1091,6 +1116,7 @@ fn unavailable_capabilities(reason: impl Into<String>) -> RuntimeCapabilities {
     RuntimeCapabilities {
         adapter: "codex".into(),
         available: false,
+        authenticated: false,
         version: None,
         minimum_version: MINIMUM_CODEX_VERSION,
         app_server: false,
@@ -1137,6 +1163,37 @@ pub enum RuntimeError {
 mod tests {
     use super::*;
 
+    fn fake_codex(
+        authenticated: bool,
+        app_server: bool,
+    ) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        #[cfg(windows)]
+        let binary = root.path().join("codex.cmd");
+        #[cfg(not(windows))]
+        let binary = root.path().join("codex");
+
+        #[cfg(windows)]
+        let source = format!(
+            "@echo off\r\nif \"%~1\"==\"--version\" (echo codex-cli 0.149.1& exit /b 0)\r\nif \"%~1\"==\"app-server\" if \"%~2\"==\"--help\" exit /b {}\r\nif \"%~1\"==\"login\" if \"%~2\"==\"status\" exit /b {}\r\nexit /b 2\r\n",
+            u8::from(!app_server),
+            u8::from(!authenticated),
+        );
+        #[cfg(not(windows))]
+        let source = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 0.149.1'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit {}; fi\nif [ \"$1\" = \"login\" ] && [ \"$2\" = \"status\" ]; then exit {}; fi\nexit 2\n",
+            u8::from(!app_server),
+            u8::from(!authenticated),
+        );
+        std::fs::write(&binary, source)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))?;
+        }
+        Ok((root, binary))
+    }
+
     #[test]
     fn parses_supported_version() -> Result<(), RuntimeError> {
         assert_eq!(
@@ -1148,6 +1205,54 @@ mod tests {
             CodexVersion::new(0, 130, 1)
         );
         assert!(CodexVersion::parse("codex-cli unknown").is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_requires_an_authenticated_codex_cli() -> Result<(), Box<dyn std::error::Error>> {
+        let (_root, binary) = fake_codex(false, true)?;
+        let capabilities = CodexAdapter::new(binary).probe().await?;
+
+        assert!(!capabilities.available);
+        assert!(!capabilities.authenticated);
+        assert!(capabilities.app_server);
+        assert_eq!(
+            capabilities.degraded_reason.as_deref(),
+            Some("Codex CLI is not authenticated; run codex login")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_reports_authenticated_fallback_capabilities()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_root, binary) = fake_codex(true, false)?;
+        let capabilities = CodexAdapter::new(binary).probe().await?;
+
+        assert!(capabilities.available);
+        assert!(capabilities.authenticated);
+        assert!(!capabilities.app_server);
+        assert!(capabilities.exec_json_fallback);
+        assert!(
+            capabilities
+                .degraded_reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("App Server unavailable"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_reports_full_capabilities_when_authenticated()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_root, binary) = fake_codex(true, true)?;
+        let capabilities = CodexAdapter::new(binary).probe().await?;
+
+        assert!(capabilities.available);
+        assert!(capabilities.authenticated);
+        assert!(capabilities.app_server);
+        assert!(capabilities.approvals);
+        assert!(capabilities.degraded_reason.is_none());
         Ok(())
     }
 

@@ -48,9 +48,9 @@ Detailed logs, worktrees, lock files, session tokens, and transient adapter stat
 
 ## Execution model
 
-A Task is schedulable only when dependencies are satisfied, approvals are clear, and its declared path scope does not conflict with a running writer. Read tasks may run without a worktree. Write tasks start in a detached worktree. After gates succeed, BA Agent creates a local commit and `ba/<workstream>/<task-id>` branch. Remote or destructive operations remain approval-gated.
+A Task is schedulable only when dependencies are satisfied, approvals are clear, and its declared path scope does not conflict with a running writer. Read tasks may run without a worktree; after every configured gate succeeds they complete with a permanent read-review receipt. Write tasks start in a detached worktree and finish with a local commit, `ba/<workstream>/<task-id>` branch, and commit receipt. CLI gate execution must match the project's configured program and argument vector exactly, so a same-name command cannot forge a required pass. Remote or destructive operations remain approval-gated.
 
-Codex App Server is the preferred adapter because it exposes threads, tool calls, approvals, and lifecycle events. Capability negotiation is recorded at startup. If the negotiated schema is unsupported, the adapter visibly degrades to `codex exec --json`; callers receive the actual capabilities, never simulated parity.
+Codex App Server is the preferred adapter because it exposes threads, tool calls, approvals, and lifecycle events. Capability negotiation verifies the CLI version, `codex login status`, App Server availability, and fallback support. An installed but unauthenticated CLI is reported as unavailable for dispatch with an explicit login action. If the negotiated protocol is unsupported, the adapter visibly degrades to `codex exec --json`; the CLI, HTTP API, and console receive the actual capabilities, never simulated parity.
 
 ## Security model
 

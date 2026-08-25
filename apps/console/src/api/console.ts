@@ -140,6 +140,26 @@ interface ApiRunEvent {
   created_at: string
 }
 
+interface ApiRuntimeCapabilities {
+  available: boolean
+  authenticated: boolean
+  version: { major: number; minor: number; patch: number } | null
+  app_server: boolean
+  exec_json_fallback: boolean
+  approvals: boolean
+  resume: boolean
+  guide: boolean
+  cancellation: boolean
+  degraded_reason: string | null
+}
+
+interface ApiAdaptersResponse {
+  adapters: Array<{
+    id: string
+    capabilities?: ApiRuntimeCapabilities
+  }>
+}
+
 interface ProjectBundle {
   project: ApiProject
   workstreams: ApiWorkstream[]
@@ -296,6 +316,7 @@ function mapSnapshot(
   profiles: ApiAgentProfile[],
   approvals: ApiApproval[],
   bundles: ProjectBundle[],
+  adapters: ApiAdaptersResponse,
 ): ConsoleSnapshot {
   const allTasks = bundles.flatMap((bundle) => bundle.tasks)
   const allRuns = bundles.flatMap((bundle) => bundle.runs)
@@ -420,6 +441,8 @@ function mapSnapshot(
     createdAt: receipt.created_at,
   }))
   const orderedReceipts = [...receipts].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const codex = adapters.adapters?.find((adapter) => adapter.id === 'codex')?.capabilities
+  const version = codex?.version
 
   return {
     source: 'live',
@@ -433,6 +456,18 @@ function mapSnapshot(
     gates,
     events: [],
     receipts,
+    runtime: {
+      available: codex?.available ?? false,
+      authenticated: codex?.authenticated ?? false,
+      version: version ? `${version.major}.${version.minor}.${version.patch}` : null,
+      appServer: codex?.app_server ?? false,
+      execJsonFallback: codex?.exec_json_fallback ?? false,
+      approvals: codex?.approvals ?? false,
+      resume: codex?.resume ?? false,
+      guide: codex?.guide ?? false,
+      cancellation: codex?.cancellation ?? false,
+      degradedReason: codex?.degraded_reason ?? null,
+    },
     metrics: {
       pendingApprovals: overview.pendingApprovals,
       runningRuns: overview.runningRuns,
@@ -447,17 +482,18 @@ function mapSnapshot(
 
 export async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
   try {
-    const [session, overview, profiles, approvals] = await Promise.all([
+    const [session, overview, profiles, approvals, adapters] = await Promise.all([
       apiFetch<SessionResponse>('/api/v1/session'),
       apiFetch<OverviewResponse>('/api/v1/overview'),
       apiFetch<ApiAgentProfile[]>('/api/v1/agent-profiles'),
       apiFetch<ApiApproval[]>('/api/v1/approvals'),
+      apiFetch<ApiAdaptersResponse>('/api/v1/adapters'),
     ])
     const projects = overview.projects.length > 0
       ? overview.projects
       : await apiFetch<ApiProject[]>('/api/v1/projects')
     const bundles = await Promise.all(projects.map(loadProjectBundle))
-    return mapSnapshot(session, overview, profiles, approvals, bundles)
+    return mapSnapshot(session, overview, profiles, approvals, bundles, adapters)
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Local service unavailable'
     return { ...demoSnapshot, fallbackReason: reason }

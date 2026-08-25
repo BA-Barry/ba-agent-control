@@ -230,6 +230,18 @@ export const demoSnapshot: ConsoleSnapshot = {
   receipts: [
     { id: '01JBRECEIPT00000000000001', kind: 'gate_passed', hash: '91d4a6c7e2b0', previousHash: '740ac824118e', createdAt: '2026-08-24T14:26:31Z' },
   ],
+  runtime: {
+    available: false,
+    authenticated: false,
+    version: null,
+    appServer: false,
+    execJsonFallback: false,
+    approvals: false,
+    resume: false,
+    guide: false,
+    cancellation: false,
+    degradedReason: 'Local service unavailable',
+  },
   metrics: {
     pendingApprovals: approvals.length,
     runningRuns: runs.filter((run) => run.status === 'running').length,

@@ -301,11 +301,14 @@ impl StoreBackend {
             FinalizationCoordinator::new(self.store.clone(), self.worktree_root.clone())
                 .finalize_if_eligible(&task_id, run_id.as_ref())?;
         if let (Some(run_id), Some(finalization)) = (&run_id, &finalization) {
-            let _event = self.control.append_event(
-                run_id,
-                "worktree.committed",
-                json!({"finalization": finalization}),
-            )?;
+            let event = if finalization.git.is_some() {
+                "worktree.committed"
+            } else {
+                "task.completed"
+            };
+            let _event =
+                self.control
+                    .append_event(run_id, event, json!({"finalization": finalization}))?;
         }
         Ok(json!({"gate": gate, "finalization": finalization}))
     }

@@ -44,7 +44,7 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function mockEmptyApi(page: Page, delayMs = 0) {
+async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, unknown>) {
   await page.route('**/api/v1/**', async (route) => {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
     const path = new URL(route.request().url()).pathname
@@ -54,6 +54,10 @@ async function mockEmptyApi(page: Page, delayMs = 0) {
     }
     if (path === '/api/v1/overview') {
       await json(route, { projects: [], pendingApprovals: 0, runningRuns: 0, failedRuns: 0, orphanedRuns: 0 })
+      return
+    }
+    if (path === '/api/v1/adapters') {
+      await json(route, { adapters: runtime ? [{ id: 'codex', capabilities: runtime }] : [] })
       return
     }
     await json(route, [])
@@ -98,6 +102,14 @@ async function mockLongRunApi(page: Page) {
     }
     if (path === '/api/v1/approvals') {
       await json(route, [])
+      return
+    }
+    if (path === '/api/v1/adapters') {
+      await json(route, { adapters: [{ id: 'codex', capabilities: {
+        available: true, authenticated: true, version: { major: 0, minor: 149, patch: 1 },
+        app_server: true, exec_json_fallback: true, approvals: true, resume: true,
+        guide: true, cancellation: true, degraded_reason: null,
+      } }] })
       return
     }
     if (path === '/api/v1/workstreams') {
@@ -180,6 +192,24 @@ test('keyboard users can skip directly to the main content', async ({ page }) =>
   await expect(page.getByRole('link', { name: '跳到主要内容' })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(page.locator('#main-content')).toBeFocused()
+})
+
+test('settings reports an installed but unauthenticated Codex CLI honestly', async ({ page }) => {
+  await mockEmptyApi(page, 0, {
+    available: false,
+    authenticated: false,
+    version: { major: 0, minor: 149, patch: 1 },
+    app_server: true,
+    exec_json_fallback: true,
+    approvals: true,
+    resume: true,
+    guide: true,
+    cancellation: true,
+    degraded_reason: 'Codex CLI is not authenticated; run codex login',
+  })
+  await page.goto('/settings')
+  await expect(page.getByText('需要登录 · codex login', { exact: true })).toBeVisible()
+  await expect(page.getByText('Codex CLI 尚未登录；请在终端运行 codex login。', { exact: true })).toBeVisible()
 })
 
 test('slow and empty local APIs have explicit, honest states', async ({ page }) => {

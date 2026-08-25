@@ -113,6 +113,19 @@ export interface ConsoleMetrics {
   eventCount: number
 }
 
+export interface RuntimeStatus {
+  available: boolean
+  authenticated: boolean
+  version: string | null
+  appServer: boolean
+  execJsonFallback: boolean
+  approvals: boolean
+  resume: boolean
+  guide: boolean
+  cancellation: boolean
+  degradedReason: string | null
+}
+
 export interface ConsoleSnapshot {
   source: 'live' | 'demo'
   fallbackReason: string | null
@@ -125,5 +138,6 @@ export interface ConsoleSnapshot {
   gates: GateResult[]
   events: RunEvent[]
   receipts: ReceiptSummary[]
+  runtime: RuntimeStatus
   metrics: ConsoleMetrics
 }

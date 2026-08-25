@@ -77,14 +77,28 @@ These are repeatable local production-build measurements, not a substitute for c
 
 ### Security-hardened Windows candidate
 
-The final local rebuild in this pass embeds the production-tested console, including real milestone/dependency operations and forced-color hardening, plus the mandatory archive-checksum installation policy. The binary is 15,843,328 bytes with SHA-256 `5ffde5c010e34fd3ab0ac5f7e5cd60420b8b8d0dfdec33df4505e81501958d53`. Its eight-entry archive is 6,306,305 bytes with SHA-256 `8199ce10bfb8a7ff0a2ca97ca476f8ecece1529ae5fa10142bbb324b17c0cd78`.
+The final local rebuild in this pass embeds the production-tested console, including real milestone/dependency operations, forced-color hardening, live runtime authentication/capability reporting, configured-gate anti-spoofing at both execution and finalization, and quality-gated read-review receipts, plus the mandatory archive-checksum installation policy. The binary is 15,876,608 bytes with SHA-256 `2aefcdbfe4132c6454aa7bb757e56461069495db4ac0438c1a7d2ae333447088`. Its eight-entry archive is 6,319,279 bytes with SHA-256 `57ab9439d74cda312fbbefd68ab28d32da8d296b0c11de3a18cd3c1c3bd2f914`.
 
 Runtime capability handshake and orphan recovery now begin immediately after the loopback listener and durable store are ready instead of blocking the listening-address handoff. Database migration/integrity, built-in role persistence, control-descriptor ownership and loopback binding remain on the synchronous safety path.
 
 | Budget | Three fresh-data measurements | Result |
 | --- | ---: | --- |
-| Core cold start `< 1 s` | 624.765 ms; 126.408 ms; 134.076 ms | Pass, including first sample |
-| Common local API p95 `< 100 ms` | 4.645 ms; 4.528 ms; 4.510 ms | Pass |
-| Core idle memory `< 100 MB` | 14.52–14.66 MiB | Pass |
+| Core cold start `< 1 s` | 827.557 ms; 142.794 ms; 183.179 ms | Pass, including first sample |
+| Common local API p95 `< 100 ms` | 6.441 ms; 6.336 ms; 6.555 ms | Pass |
+| Core idle memory `< 100 MB` | 14.53–14.57 MiB | Pass |
 
-One request in the first API sample reached 108.818 ms while p95 remained 4.645 ms; subsequent maxima were 35.046 ms and 31.946 ms. Clean-host certification must still retain first-sample results and investigate recurring outliers.
+One request in the first API sample reached 132.677 ms while p95 remained 6.441 ms; subsequent maxima were 29.300 ms and 7.358 ms. Clean-host certification must still retain first-sample results and investigate recurring outliers.
+
+## 2026-08-25 — Native WSL2 Linux x64 candidate
+
+The repository was compiled and tested inside the installed Ubuntu/WSL2 user space with Rust 1.98.0. Strict Clippy passed and 91 platform-applicable non-model tests passed; the two live Codex tests remained explicitly ignored by the default suite and were separately exercised successfully on Windows. The release binary is 15,738,224 bytes with SHA-256 `8bf850e09d7bcde9cf67aa99c496f0fd6fe4695ed579f74de9beb8939200bbd6`. Its tar archive contains eight payload files, is 6,476,421 bytes, and has SHA-256 `087e48ac7d8f7cf187d638d692adaa3765d4b2cdfafe8095c76e08674e8c746c`.
+
+The Unix installer rejected checksum mismatch, traversal entries and a symlink install directory, then passed install, upgrade, rollback, uninstall and SQLite data-retention checks. `scripts/measure-local-performance.sh` provides the same fresh-data measurement contract for Linux and macOS as the PowerShell benchmark provides on Windows.
+
+| Budget | Three fresh-data measurements | Result |
+| --- | ---: | --- |
+| Core cold start `< 1 s` | 21.282 ms; 31.506 ms; 31.713 ms | Pass |
+| Common local API p95 `< 100 ms` | 2.203 ms; 2.165 ms; 1.992 ms | Pass |
+| Core idle memory `< 100 MB` | 12.57–12.88 MiB | Pass |
+
+This is native Linux execution, but still not a clean hosted Ubuntu candidate: the mounted Windows workspace and warm WSL kernel can affect timings. A native Codex CLI 0.149.1 was installed and its App Server capability was detected, while `codex login status` confirmed that the WSL-specific session was not authenticated. The hardened runtime now reports `authenticated=false`, `available=false`, and `doctor=attention` with an explicit `codex login` action; the already authenticated Windows Codex CLI remains `doctor=ready`. Hosted Ubuntu certification and a real WSL Codex turn remain open.

@@ -12,7 +12,8 @@ use ba_git::RepoPath;
 use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
-    FinalizationCoordinator, GateCoordinator, GateDefinition, ensure_builtin_agent_profiles,
+    FinalizationCoordinator, GateCoordinator, GateDefinition, configured_gate,
+    ensure_builtin_agent_profiles,
 };
 use ba_store::SqliteStore;
 use directories::ProjectDirs;
@@ -353,13 +354,20 @@ pub async fn gate(paths: &DataPaths, command: GateCommand, json: bool) -> anyhow
             timeout_ms,
         } => {
             let cwd = cwd.canonicalize()?;
+            let task_id = id_of(&task_id)?;
+            let task = store.get_task(&task_id)?.context("task not found")?;
+            let project = store
+                .get_project(&task.project_id)?
+                .context("project not found")?;
+            let project_root = PathBuf::from(project.root_path).canonicalize()?;
+            let configured = configured_gate(&project_root, &name)?;
+            ensure_gate_command_matches(&configured, &program, &args)?;
             let definition = GateDefinition {
                 name,
                 program,
                 args,
                 timeout_ms,
             };
-            let task_id = id_of(&task_id)?;
             let run_id = run_id.as_deref().map(id_of).transpose()?;
             let gate = GateCoordinator::new(store.clone())
                 .run(&task_id, run_id.as_ref(), &cwd, &definition)
@@ -369,6 +377,20 @@ pub async fn gate(paths: &DataPaths, command: GateCommand, json: bool) -> anyhow
             emit(&json!({"gate": gate, "finalization": finalization}), json)
         }
     }
+}
+
+fn ensure_gate_command_matches(
+    configured: &GateDefinition,
+    program: &str,
+    args: &[String],
+) -> anyhow::Result<()> {
+    if configured.program != program || configured.args != args {
+        bail!(
+            "quality gate command does not match the project configuration for {}",
+            configured.name
+        );
+    }
+    Ok(())
 }
 
 pub fn receipt(paths: &DataPaths, command: ReceiptCommand, json: bool) -> anyhow::Result<()> {
@@ -509,4 +531,22 @@ pub fn emit<T: Serialize>(value: &T, json_output: bool) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(value)?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_gate_name_cannot_be_paired_with_a_different_command() {
+        let configured = GateDefinition {
+            name: "lint".into(),
+            program: "cargo".into(),
+            args: vec!["clippy".into()],
+            timeout_ms: 600_000,
+        };
+
+        assert!(ensure_gate_command_matches(&configured, "cargo", &["clippy".into()]).is_ok());
+        assert!(ensure_gate_command_matches(&configured, "git", &["--version".into()]).is_err());
+    }
 }
