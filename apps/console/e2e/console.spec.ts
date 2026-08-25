@@ -282,7 +282,7 @@ test('forced colors and 200% text keep the approval surface operable', async ({ 
   await expectNoA11yViolations(page)
 })
 
-test('production console stays within LCP, INP, and CLS budgets', async ({ page }) => {
+test('production console stays within LCP, INP, and CLS budgets', { tag: '@performance' }, async ({ page }) => {
   await seedSettings(page, 'zh', 'light')
   await mockDemoFallback(page)
   await page.addInitScript(() => {
