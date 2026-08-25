@@ -168,6 +168,70 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Insert a milestone and atomically make it the sole active milestone for its project.
+    pub fn create_milestone(&self, item: &Milestone) -> Result<(), StoreError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        if !matches!(
+            item.status.as_str(),
+            "planned" | "active" | "completed" | "cancelled"
+        ) {
+            return Err(StoreError::InvalidEntityLink(
+                "milestone status must be planned, active, completed, or cancelled",
+            ));
+        }
+        if let Some(workstream_id) = &item.workstream_id {
+            let workstream: Workstream = required_json(
+                &transaction,
+                "SELECT data FROM workstreams WHERE id=?1",
+                params![workstream_id.as_str()],
+                "workstream",
+                workstream_id,
+            )?;
+            if workstream.project_id != item.project_id {
+                return Err(StoreError::InvalidEntityLink(
+                    "milestone and workstream must belong to the same project",
+                ));
+            }
+        }
+        if item.status == "active" {
+            let mut statement = transaction
+                .prepare("SELECT data FROM milestones WHERE project_id=?1 AND status='active'")?;
+            let existing = statement
+                .query_map(params![item.project_id.as_str()], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(statement);
+            for data in existing {
+                let mut milestone: Milestone = serde_json::from_str(&data)?;
+                milestone.status = "planned".into();
+                milestone.updated_at = now();
+                transaction.execute(
+                    "UPDATE milestones SET status='planned',updated_at=?1,data=?2 WHERE id=?3",
+                    params![
+                        timestamp(milestone.updated_at),
+                        json(&milestone)?,
+                        milestone.id.as_str()
+                    ],
+                )?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO milestones(id,project_id,workstream_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                item.id.as_str(),
+                item.project_id.as_str(),
+                optional_id(item.workstream_id.as_ref()),
+                item.status,
+                timestamp(item.updated_at),
+                json(item)?
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn get_milestone(&self, id: &EntityId) -> Result<Option<Milestone>, StoreError> {
         get_json(
             &self.connection.lock(),
@@ -195,6 +259,53 @@ impl SqliteStore {
              ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,workstream_id=excluded.workstream_id,milestone_id=excluded.milestone_id,status=excluded.status,updated_at=excluded.updated_at,data=excluded.data",
             params![item.id.as_str(), item.project_id.as_str(), optional_id(item.workstream_id.as_ref()), optional_id(item.milestone_id.as_ref()), item.status.as_str(), timestamp(item.updated_at), data],
         )?;
+        Ok(())
+    }
+
+    /// Create a new workstream and its first task in one transaction.
+    ///
+    /// This is intentionally insert-only: a generated identifier collision or a
+    /// task constraint failure rolls the workstream insertion back instead of
+    /// leaving an orphaned navigation record.
+    pub fn create_workstream_and_task(
+        &self,
+        workstream: &Workstream,
+        task: &Task,
+    ) -> Result<(), StoreError> {
+        if workstream.project_id != task.project_id
+            || task.workstream_id.as_ref() != Some(&workstream.id)
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "workstream and task must belong to the same project and reference each other",
+            ));
+        }
+        let workstream_data = json(workstream)?;
+        let task_data = json(task)?;
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO workstreams(id,project_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                workstream.id.as_str(),
+                workstream.project_id.as_str(),
+                workstream.status,
+                timestamp(workstream.updated_at),
+                workstream_data
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                task.id.as_str(),
+                task.project_id.as_str(),
+                optional_id(task.workstream_id.as_ref()),
+                optional_id(task.milestone_id.as_ref()),
+                task.status.as_str(),
+                timestamp(task.updated_at),
+                task_data
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -322,6 +433,14 @@ impl SqliteStore {
             "SELECT runs.data FROM runs JOIN tasks ON tasks.id=runs.task_id WHERE tasks.project_id=?1 ORDER BY runs.updated_at DESC",
             params![project_id.as_str()],
         )
+    }
+
+    pub fn latest_run_event_sequence(&self, run_id: &EntityId) -> Result<u64, StoreError> {
+        Ok(self.connection.lock().query_row(
+            "SELECT COALESCE(MAX(sequence),0) FROM run_events WHERE run_id=?1",
+            params![run_id.as_str()],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn transition_run(&self, id: &EntityId, next: RunStatus) -> Result<Run, StoreError> {
@@ -1096,6 +1215,8 @@ pub enum StoreError {
     UnsupportedDelete(&'static str),
     #[error("run status is not terminal: {0}")]
     InvalidTerminalRunStatus(String),
+    #[error("invalid entity link: {0}")]
+    InvalidEntityLink(&'static str),
 }
 
 #[cfg(test)]

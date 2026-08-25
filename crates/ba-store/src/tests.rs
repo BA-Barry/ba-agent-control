@@ -1,7 +1,8 @@
 use std::{fs, path::Path};
 
 use ba_core::{
-    Artifact, Dispatch, EntityId, Project, ReceiptChainError, Run, RunStatus, Task, TaskStatus, now,
+    Artifact, Dispatch, EntityId, Milestone, Project, ReceiptChainError, Run, RunStatus, Task,
+    TaskStatus, Workstream, now,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -37,6 +38,83 @@ fn task(project_id: EntityId) -> Task {
         created_at: time,
         updated_at: time,
     }
+}
+
+#[test]
+fn active_milestone_replacement_is_atomic_and_unique() -> Result<(), Box<dyn std::error::Error>> {
+    let (_temp, store) = open_temp()?;
+    let project = project();
+    store.upsert_project(&project)?;
+    let stamp = now();
+    let mut other_project = project.clone();
+    other_project.id = EntityId::new();
+    other_project.root_path = "C:/other-repo".into();
+    store.upsert_project(&other_project)?;
+    let foreign_workstream = Workstream {
+        id: EntityId::new(),
+        project_id: other_project.id,
+        name: "Foreign".into(),
+        description: String::new(),
+        status: "active".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    store.upsert_workstream(&foreign_workstream)?;
+    let first = Milestone {
+        id: EntityId::new(),
+        project_id: project.id.clone(),
+        workstream_id: None,
+        name: "First".into(),
+        description: String::new(),
+        status: "active".into(),
+        due_at: None,
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    let invalid_link = Milestone {
+        id: EntityId::new(),
+        workstream_id: Some(foreign_workstream.id),
+        ..first.clone()
+    };
+    assert!(matches!(
+        store.create_milestone(&invalid_link),
+        Err(StoreError::InvalidEntityLink(_))
+    ));
+    store.create_milestone(&first)?;
+
+    let mut collision = first.clone();
+    collision.name = "Collision".into();
+    assert!(store.create_milestone(&collision).is_err());
+    assert_eq!(
+        store
+            .get_milestone(&first.id)?
+            .ok_or_else(|| std::io::Error::other("first milestone missing"))?
+            .status,
+        "active"
+    );
+
+    let second = Milestone {
+        id: EntityId::new(),
+        name: "Second".into(),
+        ..first.clone()
+    };
+    store.create_milestone(&second)?;
+    let milestones = store.list_milestones(&project.id)?;
+    assert_eq!(
+        milestones
+            .iter()
+            .filter(|milestone| milestone.status == "active")
+            .count(),
+        1
+    );
+    assert_eq!(
+        store
+            .get_milestone(&first.id)?
+            .ok_or_else(|| std::io::Error::other("first milestone missing"))?
+            .status,
+        "planned"
+    );
+    Ok(())
 }
 
 fn run(task_id: EntityId) -> Run {
@@ -121,6 +199,7 @@ fn run_events_are_append_only_and_strictly_ordered() -> Result<(), Box<dyn std::
         2
     );
     let events = store.list_run_events(&run.id, 0)?;
+    assert_eq!(store.latest_run_event_sequence(&run.id)?, 2);
     assert_eq!(
         events
             .iter()
@@ -128,6 +207,36 @@ fn run_events_are_append_only_and_strictly_ordered() -> Result<(), Box<dyn std::
             .collect::<Vec<_>>(),
         vec![1, 2]
     );
+    Ok(())
+}
+
+#[test]
+fn workstream_and_first_task_creation_rolls_back_as_one_unit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp, store) = open_temp()?;
+    let project = project();
+    let existing = task(project.id.clone());
+    store.upsert_project(&project)?;
+    store.upsert_task(&existing)?;
+
+    let stamp = now();
+    let workstream = Workstream {
+        id: EntityId::new(),
+        project_id: project.id.clone(),
+        name: "Atomic workflow".into(),
+        description: String::new(),
+        status: "active".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    let mut colliding_task = existing;
+    colliding_task.workstream_id = Some(workstream.id.clone());
+    assert!(
+        store
+            .create_workstream_and_task(&workstream, &colliding_task)
+            .is_err()
+    );
+    assert!(store.list_workstreams(&project.id)?.is_empty());
     Ok(())
 }
 

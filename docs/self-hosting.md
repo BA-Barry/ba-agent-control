@@ -1,6 +1,6 @@
 # Self-hosting evidence
 
-BA Agent registered its own repository as project `01M0SJAAPZMHYQNC6GN3HY4Q1H` and created the `personal-alpha` workstream on 2026-08-24. The visual task remains blocked at the user-approved comp-first gate; console implementation and public-release work remain draft.
+BA Agent registered its own repository as project `01M0SJAAPZMHYQNC6GN3HY4Q1H` and created the `personal-alpha` workstream on 2026-08-24. On 2026-08-25 the user resolved the visual gate in favor of the comp-first “测量员外业簿” direction, and the seven-surface console plus live local API/SSE integration passed local verification. Existing durable Task records must still be reconciled through explicit lifecycle transitions; this document does not retroactively rewrite their state.
 
 ## Reviewer run 01M0SK3R8GRGFNSSB1P0A28X99
 
@@ -14,3 +14,9 @@ The first real self-hosted task asked the built-in read-only Reviewer to inspect
 The defect was reproduced safely in a Rust `tempfile` test and fixed. Missing evidence now reports `would-restore` in dry-run, restores only with `--apply`, appends a repair Receipt, and revalidates the hash chain. The approval ergonomics and rejected-command recovery behavior is tracked as task `01M0SKWJKQHM8MVWC7H3PAP1YZ`.
 
 This run is intentionally retained as failed evidence. It demonstrates that self-hosting captures approval decisions and failure paths rather than rewriting them into a synthetic success.
+
+## Reviewer run 01M0VPSZM9FQR2HPHNV30V0GS4
+
+On 2026-08-25 a second read-only Reviewer run inspected the native project/task creation, retry, and worktree-display changes. It launched through Codex App Server, persisted its desktop thread identity, crossed two explicit read-only command approvals, and recorded 165 ordered events without state loss.
+
+The run terminated with the runtime's structured `usageLimitExceeded` error after the account reported 99% of its weekly limit. BA Agent atomically marked the Run and Task failed and left no pending approval. It is not counted toward the three consecutive successful self-hosting workflows; retry remains available when the external usage window resets.

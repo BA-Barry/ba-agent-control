@@ -18,6 +18,17 @@ case "$action" in
     archive=${2:-}
     [ -n "$archive" ] || { echo "usage: install.sh install <archive> [prefix]" >&2; exit 2; }
     archive=$(CDPATH= cd -- "$(dirname -- "$archive")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "$archive")")
+    checksum_file="$archive.sha256"
+    [ -f "$checksum_file" ] || { echo "checksum sidecar is required: $checksum_file" >&2; exit 1; }
+    expected_hash=$(awk 'NR == 1 { print $1; exit }' "$checksum_file")
+    case "$expected_hash" in *[!0-9A-Fa-f]*|'') echo "checksum sidecar does not start with a valid SHA-256 digest" >&2; exit 1;; esac
+    [ "${#expected_hash}" -eq 64 ] || { echo "checksum sidecar does not start with a valid SHA-256 digest" >&2; exit 1; }
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual_hash=$(sha256sum "$archive" | awk '{print $1}')
+    else
+      actual_hash=$(shasum -a 256 "$archive" | awk '{print $1}')
+    fi
+    [ "$actual_hash" = "$expected_hash" ] || { echo "archive checksum mismatch" >&2; exit 1; }
     staging=$(mktemp -d "${TMPDIR:-/tmp}/ba-agent-install.XXXXXX")
     cleanup() { case "$staging" in "${TMPDIR:-/tmp}"/ba-agent-install.*) rm -rf -- "$staging";; esac; }
     trap cleanup EXIT INT TERM
@@ -27,13 +38,13 @@ case "$action" in
       normalized=${entry#./}
       case "$normalized" in
         '') ;;
-        ba-agent-control|install.sh|installation.md|LICENSE|NOTICE|README.md|THIRD_PARTY_LICENSES.md)
+        ba-agent-control|install.sh|installation.md|LICENSE|NOTICE|README.md|THIRD_PARTY_LICENSES.md|THIRD_PARTY_NOTICES.txt)
           printf '%s\n' "$normalized" >> "$staging/normalized"
           ;;
         *) echo "archive contains an unsafe or unexpected entry: $entry" >&2; exit 1 ;;
       esac
     done < "$staging/entries"
-    printf '%s\n' ba-agent-control install.sh installation.md LICENSE NOTICE README.md THIRD_PARTY_LICENSES.md |
+    printf '%s\n' ba-agent-control install.sh installation.md LICENSE NOTICE README.md THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt |
       LC_ALL=C sort > "$staging/expected"
     LC_ALL=C sort "$staging/normalized" > "$staging/actual"
     cmp -s "$staging/expected" "$staging/actual" || {

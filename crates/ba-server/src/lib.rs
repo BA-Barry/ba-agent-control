@@ -22,7 +22,10 @@ use axum::{
     response::{IntoResponse, Redirect, Response, Sse, sse::Event},
     routing::{get, post},
 };
-use ba_core::{EntityId, Project, RunEvent, Task, TaskStatus, Workstream, now};
+use ba_core::{
+    EntityId, Milestone, Project, Run, RunEvent, RunStatus, Task, TaskStatus, Timestamp,
+    Workstream, Worktree, now,
+};
 use ba_git::RepoPath;
 use ba_github::{GitHubAdapter, GitHubError};
 use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, RuntimeAdapter};
@@ -277,27 +280,14 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
     let store = SqliteStore::open(config.database_path)?;
     ensure_builtin_agent_profiles(&store)?;
     let runtime: Arc<dyn RuntimeAdapter> = Arc::new(CodexAdapter::new(config.codex_binary));
-    let capabilities = runtime.probe().await?;
-    let recovery_records =
-        RecoveryCoordinator::new(store.clone()).reconcile(&BTreeSet::new(), &capabilities)?;
-    let control = RuntimeCoordinator::with_event_sender(store.clone(), runtime, events.clone());
-    for record in recovery_records {
-        if matches!(record.action, RecoveryAction::Resume { .. }) {
-            if let Err(error) = control.resume(&record.run_id, None).await {
-                tracing::warn!(
-                    run_id = %record.run_id,
-                    error = %error,
-                    "automatic runtime recovery remained orphaned"
-                );
-            }
-        }
-    }
+    let control =
+        RuntimeCoordinator::with_event_sender(store.clone(), runtime.clone(), events.clone());
     let state = AppState {
-        store,
+        store: store.clone(),
         security,
         events,
         worktree_root: config.worktree_root,
-        control,
+        control: control.clone(),
         github: GitHubAdapter::default(),
     };
     let (shutdown, receiver) = tokio::sync::oneshot::channel();
@@ -310,6 +300,34 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
             .map_err(anyhow::Error::from);
         drop(control_claim);
         result
+    });
+    tokio::spawn(async move {
+        let capabilities = match runtime.probe().await {
+            Ok(capabilities) => capabilities,
+            Err(error) => {
+                tracing::warn!(error = %error, "startup runtime capability handshake failed");
+                return;
+            }
+        };
+        let recovery_records =
+            match RecoveryCoordinator::new(store).reconcile(&BTreeSet::new(), &capabilities) {
+                Ok(records) => records,
+                Err(error) => {
+                    tracing::warn!(error = %error, "startup runtime recovery scan failed");
+                    return;
+                }
+            };
+        for record in recovery_records {
+            if matches!(record.action, RecoveryAction::Resume { .. }) {
+                if let Err(error) = control.resume(&record.run_id, None).await {
+                    tracing::warn!(
+                        run_id = %record.run_id,
+                        error = %error,
+                        "automatic runtime recovery remained orphaned"
+                    );
+                }
+            }
+        }
     });
     Ok(ServerHandle {
         address,
@@ -325,11 +343,13 @@ pub fn router(state: AppState) -> Router {
         .route("/overview", get(overview))
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/{id}", get(get_project))
+        .route("/worktrees", get(list_worktrees))
         .route("/agent-profiles", get(list_agent_profiles))
         .route(
             "/workstreams",
             get(list_workstreams).post(create_workstream),
         )
+        .route("/milestones", get(list_milestones).post(create_milestone))
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}/transition", post(transition_task))
         .route("/dispatches", post(create_dispatch))
@@ -338,6 +358,7 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{id}/events", get(run_events))
         .route("/runs/{id}/message", post(message_run))
         .route("/runs/{id}/cancel", post(cancel_run))
+        .route("/runs/{id}/retry", post(retry_run))
         .route("/approvals", get(list_approvals))
         .route("/approvals/{id}/respond", post(respond_approval))
         .route("/gates", get(list_gates))
@@ -552,6 +573,15 @@ async fn get_project(
         .ok_or_else(|| ApiError::not_found("project not found"))
 }
 
+async fn list_worktrees(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<Worktree>>, ApiError> {
+    Ok(Json(
+        state.store.list_worktrees(&parse_id(&query.project_id)?)?,
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct ProjectQuery {
     project_id: String,
@@ -602,38 +632,42 @@ async fn create_workstream(
     Ok((StatusCode::CREATED, Json(workstream)))
 }
 
-async fn list_tasks(
+async fn list_milestones(
     State(state): State<AppState>,
     Query(query): Query<ProjectQuery>,
-) -> Result<Json<Vec<Task>>, ApiError> {
-    Ok(Json(state.store.list_tasks(&parse_id(&query.project_id)?)?))
+) -> Result<Json<Vec<Milestone>>, ApiError> {
+    Ok(Json(
+        state.store.list_milestones(&parse_id(&query.project_id)?)?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateTask {
+struct CreateMilestone {
     project_id: String,
     workstream_id: Option<String>,
-    milestone_id: Option<String>,
-    title: String,
+    name: String,
     #[serde(default)]
     description: String,
-    #[serde(default)]
-    write: bool,
-    #[serde(default)]
-    path_scope: Vec<String>,
-    #[serde(default)]
-    depends_on: Vec<String>,
+    #[serde(default = "default_milestone_status")]
+    status: String,
+    due_at: Option<Timestamp>,
 }
 
-async fn create_task(
+async fn create_milestone(
     State(state): State<AppState>,
-    Json(input): Json<CreateTask>,
-) -> Result<(StatusCode, Json<Task>), ApiError> {
-    if input.title.trim().is_empty() || (input.write && input.path_scope.is_empty()) {
-        return Err(ApiError::bad_request(
-            "task title and write scope are required",
-        ));
+    Json(input): Json<CreateMilestone>,
+) -> Result<(StatusCode, Json<Milestone>), ApiError> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("milestone name must not be empty"));
+    }
+    let status = input.status.trim().to_ascii_lowercase();
+    if !matches!(
+        status.as_str(),
+        "planned" | "active" | "completed" | "cancelled"
+    ) {
+        return Err(ApiError::bad_request("invalid milestone status"));
     }
     let project_id = parse_id(&input.project_id)?;
     if state.store.get_project(&project_id)?.is_none() {
@@ -651,6 +685,115 @@ async fn create_task(
             ));
         }
     }
+    let stamp = now();
+    let milestone = Milestone {
+        id: EntityId::new(),
+        project_id,
+        workstream_id,
+        name: name.to_owned(),
+        description: input.description,
+        status,
+        due_at: input.due_at,
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    state.store.create_milestone(&milestone)?;
+    Ok((StatusCode::CREATED, Json(milestone)))
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<Task>>, ApiError> {
+    Ok(Json(state.store.list_tasks(&parse_id(&query.project_id)?)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTask {
+    project_id: String,
+    workstream_id: Option<String>,
+    workstream_name: Option<String>,
+    milestone_id: Option<String>,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    write: bool,
+    #[serde(default)]
+    path_scope: Vec<String>,
+    #[serde(default)]
+    depends_on: Vec<String>,
+}
+
+fn resolve_task_workstream(
+    state: &AppState,
+    project_id: &EntityId,
+    requested_id: Option<String>,
+    requested_name: Option<&str>,
+    stamp: Timestamp,
+) -> Result<(Option<EntityId>, Option<Workstream>), ApiError> {
+    let name = requested_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if requested_id.is_some() && name.is_some() {
+        return Err(ApiError::bad_request(
+            "provide either workstreamId or workstreamName, not both",
+        ));
+    }
+    if let Some(name) = name {
+        let workstream = Workstream {
+            id: EntityId::new(),
+            project_id: project_id.clone(),
+            name: name.to_owned(),
+            description: String::new(),
+            status: "active".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        return Ok((Some(workstream.id.clone()), Some(workstream)));
+    }
+    let id = requested_id.map(|id| parse_id(&id)).transpose()?;
+    if let Some(id) = &id {
+        let workstream = state
+            .store
+            .get_workstream(id)?
+            .ok_or_else(|| ApiError::not_found("workstream not found"))?;
+        if workstream.project_id != *project_id {
+            return Err(ApiError::bad_request(
+                "workstream belongs to a different project",
+            ));
+        }
+    }
+    Ok((id, None))
+}
+
+async fn create_task(
+    State(state): State<AppState>,
+    Json(input): Json<CreateTask>,
+) -> Result<(StatusCode, Json<Task>), ApiError> {
+    if input.title.trim().is_empty() || (input.write && input.path_scope.is_empty()) {
+        return Err(ApiError::bad_request(
+            "task title and write scope are required",
+        ));
+    }
+    if !input.write && !input.path_scope.is_empty() {
+        return Err(ApiError::bad_request(
+            "read-only tasks cannot declare write scopes",
+        ));
+    }
+    let project_id = parse_id(&input.project_id)?;
+    if state.store.get_project(&project_id)?.is_none() {
+        return Err(ApiError::not_found("project not found"));
+    }
+    let stamp = now();
+    let (workstream_id, generated_workstream) = resolve_task_workstream(
+        &state,
+        &project_id,
+        input.workstream_id,
+        input.workstream_name.as_deref(),
+        stamp,
+    )?;
     let milestone_id = input.milestone_id.map(|id| parse_id(&id)).transpose()?;
     if let Some(id) = &milestone_id {
         let milestone = state
@@ -660,6 +803,11 @@ async fn create_task(
         if milestone.project_id != project_id {
             return Err(ApiError::bad_request(
                 "milestone belongs to a different project",
+            ));
+        }
+        if milestone.workstream_id.is_some() && milestone.workstream_id != workstream_id {
+            return Err(ApiError::bad_request(
+                "milestone belongs to a different workstream",
             ));
         }
     }
@@ -683,7 +831,6 @@ async fn create_task(
             ));
         }
     }
-    let stamp = now();
     let task = Task {
         id: EntityId::new(),
         project_id,
@@ -698,7 +845,11 @@ async fn create_task(
         created_at: stamp,
         updated_at: stamp,
     };
-    state.store.upsert_task(&task)?;
+    if let Some(workstream) = &generated_workstream {
+        state.store.create_workstream_and_task(workstream, &task)?;
+    } else {
+        state.store.upsert_task(&task)?;
+    }
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -748,10 +899,25 @@ struct RunQuery {
     project_id: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct RunResource {
+    #[serde(flatten)]
+    run: Run,
+    event_sequence: u64,
+}
+
+fn run_resource(state: &AppState, run: Run) -> Result<RunResource, ApiError> {
+    let event_sequence = state.store.latest_run_event_sequence(&run.id)?;
+    Ok(RunResource {
+        run,
+        event_sequence,
+    })
+}
+
 async fn list_runs(
     State(state): State<AppState>,
     Query(query): Query<RunQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Vec<RunResource>>, ApiError> {
     let runs = if let Some(id) = query.task_id {
         state.store.list_runs(&parse_id(&id)?)?
     } else if let Some(id) = query.project_id {
@@ -759,17 +925,22 @@ async fn list_runs(
     } else {
         return Err(ApiError::bad_request("task_id or project_id is required"));
     };
-    Ok(Json(json!(runs)))
+    Ok(Json(
+        runs.into_iter()
+            .map(|run| run_resource(&state, run))
+            .collect::<Result<Vec<_>, _>>()?,
+    ))
 }
 
 async fn get_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<RunResource>, ApiError> {
     state
         .store
         .get_run(&parse_id(&id)?)?
-        .map(|run| Json(json!(run)))
+        .map(|run| run_resource(&state, run).map(Json))
+        .transpose()?
         .ok_or_else(|| ApiError::not_found("run not found"))
 }
 
@@ -808,6 +979,63 @@ async fn cancel_run(
     Ok(Json(json!({"run": run, "event": event})))
 }
 
+async fn retry_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let run_id = parse_id(&id)?;
+    let previous = state
+        .store
+        .get_run(&run_id)?
+        .ok_or_else(|| ApiError::not_found("run not found"))?;
+
+    if previous.status == RunStatus::Orphaned {
+        let run = state
+            .control
+            .resume(&run_id, None)
+            .await
+            .map_err(ApiError::bad_gateway)?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({"mode":"resumed","run":run})),
+        ));
+    }
+    if previous.status != RunStatus::Failed {
+        return Err(ApiError::conflict(
+            "only failed or orphaned runs can be retried",
+        ));
+    }
+
+    let task = state
+        .store
+        .get_task(&previous.task_id)?
+        .ok_or_else(|| ApiError::not_found("task not found"))?;
+    match task.status {
+        TaskStatus::Failed | TaskStatus::Blocked => {
+            state.store.transition_task(&task.id, TaskStatus::Ready)?;
+        }
+        TaskStatus::Ready => {}
+        _ => {
+            return Err(ApiError::conflict(format!(
+                "task {} cannot be retried from {}",
+                task.id, task.status
+            )));
+        }
+    }
+    let bundle = DispatchCoordinator::new(state.store.clone(), state.worktree_root.clone())
+        .enqueue(&task.id, previous.agent_profile_id.as_ref())
+        .map_err(|error| ApiError::conflict(error.to_string()))?;
+    let bundle = state
+        .control
+        .launch(bundle, None)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"mode":"retried","run":bundle.run,"dispatch":bundle.dispatch})),
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 struct EventQuery {
     #[serde(default)]
@@ -828,13 +1056,13 @@ async fn run_events(
             .store
             .list_run_events(&run_id, query.after)?
             .into_iter()
-            .map(|event| Ok(event_to_sse(event))),
+            .map(|event| Ok(event_to_sse(&event))),
     );
     let target = run_id.clone();
     let live =
         BroadcastStream::new(state.events.subscribe()).filter_map(move |result| match result {
             Ok(event) if event.run_id == target && event.sequence > query.after => {
-                Some(Ok(event_to_sse(event)))
+                Some(Ok(event_to_sse(&event)))
             }
             _ => None,
         });
@@ -845,12 +1073,12 @@ async fn run_events(
     ))
 }
 
-fn event_to_sse(event: RunEvent) -> Event {
+fn event_to_sse(event: &RunEvent) -> Event {
     let data = serde_json::to_string(&event)
         .unwrap_or_else(|error| json!({"error": error.to_string()}).to_string());
     Event::default()
         .id(event.sequence.to_string())
-        .event(event.kind)
+        .event("run-event")
         .data(data)
 }
 
@@ -1089,6 +1317,10 @@ fn default_language() -> String {
     "zh-CN".into()
 }
 
+fn default_milestone_status() -> String {
+    "planned".into()
+}
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -1312,6 +1544,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sse_uses_a_stable_envelope_for_arbitrary_domain_event_kinds() -> anyhow::Result<()> {
+        let event = RunEvent {
+            run_id: EntityId::new(),
+            sequence: 7,
+            kind: "runtime.future_protocol_event".into(),
+            payload: json!({"value": 1}),
+            created_at: now(),
+        };
+        let response = Sse::new(tokio_stream::iter([Ok::<Event, Infallible>(event_to_sse(
+            &event,
+        ))]))
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+        let body = std::str::from_utf8(&body)?;
+        assert!(body.contains("event: run-event"));
+        assert!(body.contains("runtime.future_protocol_event"));
+        assert!(body.contains("id: 7"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn control_descriptor_is_single_owner_and_removed_on_drop() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let path = directory.path().join("control.json");
@@ -1386,6 +1639,20 @@ mod tests {
             .await?;
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 
+        let worktrees = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/worktrees?project_id={project_id}"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(worktrees.status(), StatusCode::OK);
+        let body = to_bytes(worktrees.into_body(), 16 * 1024).await?;
+        let body: Value = serde_json::from_slice(&body)?;
+        assert_eq!(body, json!([]));
+
         let allowed = application
             .oneshot(
                 Request::builder()
@@ -1399,6 +1666,186 @@ mod tests {
             )
             .await?;
         assert_eq!(allowed.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_creation_can_atomically_create_its_workstream() -> anyhow::Result<()> {
+        let state = state()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Atomic project".into(),
+            root_path: "C:/repository".into(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+
+        let (status, Json(task)) = create_task(
+            State(state.clone()),
+            Json(CreateTask {
+                project_id: project.id.to_string(),
+                workstream_id: None,
+                workstream_name: Some("Console".into()),
+                milestone_id: None,
+                title: "Create an atomic task".into(),
+                description: String::new(),
+                write: false,
+                path_scope: Vec::new(),
+                depends_on: Vec::new(),
+            }),
+        )
+        .await?;
+
+        assert_eq!(status, StatusCode::CREATED);
+        let workstreams = state.store.list_workstreams(&project.id)?;
+        assert_eq!(workstreams.len(), 1);
+        assert_eq!(task.workstream_id.as_ref(), Some(&workstreams[0].id));
+
+        let read_scope_error = create_task(
+            State(state.clone()),
+            Json(CreateTask {
+                project_id: project.id.to_string(),
+                workstream_id: None,
+                workstream_name: None,
+                milestone_id: None,
+                title: "Invalid read scope".into(),
+                description: String::new(),
+                write: false,
+                path_scope: vec!["apps/console/**".into()],
+                depends_on: Vec::new(),
+            }),
+        )
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("read-only write scope was accepted"))?;
+        assert_eq!(read_scope_error.status, StatusCode::BAD_REQUEST);
+
+        let foreign_project = Project {
+            id: EntityId::new(),
+            name: "Foreign project".into(),
+            root_path: "C:/foreign-repository".into(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&foreign_project)?;
+        let foreign_task = Task {
+            id: EntityId::new(),
+            project_id: foreign_project.id,
+            workstream_id: None,
+            milestone_id: None,
+            title: "Foreign dependency".into(),
+            description: String::new(),
+            status: TaskStatus::Ready,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_task(&foreign_task)?;
+        let dependency_error = create_task(
+            State(state),
+            Json(CreateTask {
+                project_id: project.id.to_string(),
+                workstream_id: None,
+                workstream_name: None,
+                milestone_id: None,
+                title: "Invalid dependency".into(),
+                description: String::new(),
+                write: false,
+                path_scope: Vec::new(),
+                depends_on: vec![foreign_task.id.to_string()],
+            }),
+        )
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("cross-project dependency was accepted"))?;
+        assert_eq!(dependency_error.status, StatusCode::BAD_REQUEST);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn milestone_resource_persists_real_project_progress_boundaries() -> anyhow::Result<()> {
+        let state = state()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Milestone project".into(),
+            root_path: "C:/milestone-project".into(),
+            description: "this is not a milestone".into(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        let other_project = Project {
+            id: EntityId::new(),
+            name: "Other project".into(),
+            root_path: "C:/other-project".into(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+        state.store.upsert_project(&other_project)?;
+        let foreign_workstream = Workstream {
+            id: EntityId::new(),
+            project_id: other_project.id,
+            name: "Foreign".into(),
+            description: String::new(),
+            status: "active".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_workstream(&foreign_workstream)?;
+
+        let invalid = create_milestone(
+            State(state.clone()),
+            Json(CreateMilestone {
+                project_id: project.id.to_string(),
+                workstream_id: Some(foreign_workstream.id.to_string()),
+                name: "Invalid link".into(),
+                description: String::new(),
+                status: "planned".into(),
+                due_at: None,
+            }),
+        )
+        .await
+        .err()
+        .ok_or_else(|| std::io::Error::other("cross-project milestone was accepted"))?;
+        assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+
+        let due_at = stamp + Duration::from_secs(7 * 24 * 60 * 60);
+        let (status, Json(milestone)) = create_milestone(
+            State(state.clone()),
+            Json(CreateMilestone {
+                project_id: project.id.to_string(),
+                workstream_id: None,
+                name: "Personal Alpha".into(),
+                description: "real milestone resource".into(),
+                status: "active".into(),
+                due_at: Some(due_at),
+            }),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::CREATED);
+        let Json(milestones) = list_milestones(
+            State(state),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert_eq!(milestones.len(), 1);
+        assert_eq!(milestones[0].id, milestone.id);
+        assert_eq!(milestones[0].name, "Personal Alpha");
+        assert_eq!(milestones[0].due_at, Some(due_at));
         Ok(())
     }
 
@@ -1483,6 +1930,85 @@ mod tests {
             "succeeded"
         );
         assert!(store.list_run_events(&launched.run.id, 0)?.len() >= 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_run_retry_creates_a_new_attempt_and_reuses_the_profile() -> anyhow::Result<()> {
+        let directory = tempdir()?.keep();
+        let store = SqliteStore::open(directory.join("ba-agent.db"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "retry-test".into(),
+            root_path: directory.to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        ensure_builtin_agent_profiles(&store)?;
+        let profile = store
+            .list_agent_profiles()?
+            .into_iter()
+            .next()
+            .map(|item| item.id);
+        let task = Task {
+            id: EntityId::new(),
+            project_id: project.id,
+            workstream_id: None,
+            milestone_id: None,
+            title: "Retry a failed read-only run".into(),
+            description: String::new(),
+            status: TaskStatus::Failed,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_task(&task)?;
+        let previous = ba_core::Run {
+            id: EntityId::new(),
+            task_id: task.id.clone(),
+            agent_profile_id: profile.clone(),
+            status: RunStatus::Failed,
+            adapter: "codex-app-server".into(),
+            runtime_run_id: Some("failed-runtime".into()),
+            runtime_thread_id: Some("failed-thread".into()),
+            started_at: Some(stamp),
+            finished_at: Some(stamp),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_run(&previous)?;
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 41417);
+        let (events, _receiver) = broadcast::channel(16);
+        let state = AppState {
+            store: store.clone(),
+            security: Arc::new(SessionSecurity::new(address)),
+            events: events.clone(),
+            worktree_root: directory.join("worktrees"),
+            control: RuntimeCoordinator::with_event_sender(
+                store.clone(),
+                Arc::new(MockRuntime::new()),
+                events,
+            ),
+            github: GitHubAdapter::default(),
+        };
+
+        let (status, Json(body)) = retry_run(State(state), Path(previous.id.to_string())).await?;
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["mode"], "retried");
+        let attempts = store.list_runs(&task.id)?;
+        assert_eq!(attempts.len(), 2);
+        let retried = attempts
+            .iter()
+            .find(|run| run.id != previous.id)
+            .ok_or_else(|| anyhow::anyhow!("retry run missing"))?;
+        assert_eq!(retried.agent_profile_id, profile);
         Ok(())
     }
 

@@ -70,9 +70,6 @@ impl DispatchCoordinator {
         }
 
         self.admit(&task)?;
-        let worktree = self.create_worktree(&task)?;
-
-        self.store.transition_task(task_id, TaskStatus::Queued)?;
         let stamp = now();
         let run = Run {
             id: EntityId::new(),
@@ -87,6 +84,9 @@ impl DispatchCoordinator {
             created_at: stamp,
             updated_at: stamp,
         };
+        let worktree = self.create_worktree(&task, &run.id)?;
+
+        self.store.transition_task(task_id, TaskStatus::Queued)?;
         self.store.upsert_run(&run)?;
         let dispatch = Dispatch {
             id: EntityId::new(),
@@ -147,7 +147,11 @@ impl DispatchCoordinator {
         Ok(())
     }
 
-    fn create_worktree(&self, task: &Task) -> Result<Option<Worktree>, SchedulerError> {
+    fn create_worktree(
+        &self,
+        task: &Task,
+        run_id: &EntityId,
+    ) -> Result<Option<Worktree>, SchedulerError> {
         if !task.write {
             return Ok(None);
         }
@@ -164,7 +168,12 @@ impl DispatchCoordinator {
             &project.root_path,
             self.worktree_root.join(task.project_id.as_str()),
         )?;
-        let handle = manager.create_detached(task.id.as_str(), scope)?;
+        let attempt_name = format!(
+            "{}-{}",
+            task.id.as_str(),
+            &run_id.as_str()[run_id.as_str().len() - 6..]
+        );
+        let handle = manager.create_detached(&attempt_name, scope)?;
         let stamp = now();
         let worktree = Worktree {
             id: EntityId::new(),

@@ -33,7 +33,7 @@ $staging = Join-Path $outputRoot (".staging-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $staging | Out-Null
 try {
     Copy-Item -LiteralPath $resolvedBinary -Destination (Join-Path $staging "ba-agent-control.exe")
-    foreach ($file in @("README.md", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md")) {
+    foreach ($file in @("README.md", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md", "THIRD_PARTY_NOTICES.txt")) {
         Copy-Item -LiteralPath (Join-Path $repositoryRoot $file) -Destination $staging
     }
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "docs/installation.md") -Destination $staging

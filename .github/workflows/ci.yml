@@ -45,9 +45,16 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - run: python plugins/personal-marketplace/plugins/ba-agent-control/scripts/validate_bundle.py
+      - run: python plugins/personal-marketplace/plugins/ba-agent-control/scripts/test_hook_guard.py
       - run: pnpm licenses:generate
-      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md
+      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt
       - run: pnpm validate
       - run: pnpm build
+      - run: pnpm --dir apps/console exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/console test:e2e

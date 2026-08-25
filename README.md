@@ -2,7 +2,7 @@
 
 BA Agent (`ba-agent-control`) is a local-first control plane for coordinating auditable AI-assisted development across multiple Git projects. It reuses your authenticated Codex CLI, isolates write tasks in worktrees, pauses risky operations for approval, and stores permanent hash-chained quality receipts.
 
-> Status: foundation, core vertical slice, complete Codex control, and configuration compatibility are complete locally. The seven-surface console remains at its comp-first visual gate. This repository is intentionally local-only; no remote repository or release has been created.
+> Status: the personal Alpha feature set is complete locally; continuous self-hosting and Public Beta release certification remain in progress. This repository is intentionally local-only; no remote repository or release has been created.
 
 ## What works in this Alpha
 
@@ -14,8 +14,9 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Probe GitHub credentials safely and inspect repository metadata without enabling remote writes.
 - Generate Codex and Claude-compatible project configuration without overwriting user-owned content.
 - Import and safely restore runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.
+- Operate all seven bilingual console surfaces with real local API/SSE data, responsive themes, keyboard navigation, project/task creation, run control, approvals, and receipt verification.
 
-The seven-surface bilingual console is not implemented yet. Its visual direction is fixed to “测量员外业簿”, but implementation remains behind the approved comp-first gate: three comps must be generated and one selected first. The current embedded console is only an unstyled bootstrap notice.
+The console follows the approved comp-first “测量员外业簿” direction and is embedded into the Rust binary. When the local service is unavailable it enters an explicitly labeled demonstration mode instead of presenting sample data as live state.
 
 ## Quick start
 
@@ -41,9 +42,12 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 pnpm validate
+pnpm test:e2e
+python plugins/personal-marketplace/plugins/ba-agent-control/scripts/validate_bundle.py
+python plugins/personal-marketplace/plugins/ba-agent-control/scripts/test_hook_guard.py
 ```
 
-See [Architecture](docs/architecture.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [Architecture](docs/architecture.md), [Completion audit](docs/completion-audit.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## License
 

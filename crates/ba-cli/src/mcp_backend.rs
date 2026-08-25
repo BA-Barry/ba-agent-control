@@ -2,7 +2,8 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
-use ba_core::{EntityId, RunStatus, Task, TaskStatus, now};
+use ba_core::{EntityId, Milestone, RunStatus, Task, TaskStatus, Timestamp, now};
+use ba_git::RepoPath;
 use ba_mcp::{ToolBackend, ToolError};
 use ba_runtime::{ApprovalDecision, CodexAdapter};
 use ba_scheduler::{
@@ -48,12 +49,14 @@ impl StoreBackend {
                 let id = required_id(arguments, "project_id")?;
                 let project = self.store.get_project(&id)?.context("project not found")?;
                 let workstreams = self.store.list_workstreams(&id)?;
+                let milestones = self.store.list_milestones(&id)?;
                 let tasks = self.store.list_tasks(&id)?;
                 let runs = self.store.list_project_runs(&id)?;
                 Ok(json!({
                     "project": project,
                     "health": {
                         "workstreams": workstreams.len(),
+                        "milestones": milestones.len(),
                         "tasks": tasks.len(),
                         "runs": runs.len(),
                         "blocked": tasks.iter().filter(|item| item.status == TaskStatus::Blocked).count(),
@@ -65,6 +68,11 @@ impl StoreBackend {
                 self.store
                     .list_workstreams(&required_id(arguments, "project_id")?)?,
             )?),
+            "milestone.list" => Ok(serde_json::to_value(
+                self.store
+                    .list_milestones(&required_id(arguments, "project_id")?)?,
+            )?),
+            "milestone.create" => self.create_milestone(arguments),
             "task.list" => {
                 let workstream_id = required_id(arguments, "workstream_id")?;
                 let workstream = self
@@ -140,12 +148,52 @@ impl StoreBackend {
             .store
             .get_workstream(&workstream_id)?
             .context("workstream not found")?;
+        let project_id = workstream.project_id;
+        let milestone_id = optional_id(arguments, "milestone_id")?;
+        if let Some(id) = &milestone_id {
+            let milestone = self
+                .store
+                .get_milestone(id)?
+                .context("milestone not found")?;
+            if milestone.project_id != project_id {
+                anyhow::bail!("milestone belongs to a different project");
+            }
+            if milestone.workstream_id.is_some()
+                && milestone.workstream_id.as_ref() != Some(&workstream_id)
+            {
+                anyhow::bail!("milestone belongs to a different workstream");
+            }
+        }
+        let write = optional_bool(arguments, "write")?.unwrap_or(false);
+        let path_scope = optional_string_array(arguments, "path_scope")?;
+        if write && path_scope.is_empty() {
+            anyhow::bail!("write tasks require at least one path_scope entry");
+        }
+        if !write && !path_scope.is_empty() {
+            anyhow::bail!("read-only tasks cannot declare path_scope");
+        }
+        for scope in &path_scope {
+            RepoPath::new(scope).with_context(|| format!("invalid write scope: {scope}"))?;
+        }
+        let depends_on = optional_string_array(arguments, "depends_on")?
+            .iter()
+            .map(|id| EntityId::from_str(id).map_err(anyhow::Error::from))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for dependency_id in &depends_on {
+            let dependency = self
+                .store
+                .get_task(dependency_id)?
+                .context("dependency task not found")?;
+            if dependency.project_id != project_id {
+                anyhow::bail!("dependency task belongs to a different project");
+            }
+        }
         let stamp = now();
         let task = Task {
             id: EntityId::new(),
-            project_id: workstream.project_id,
+            project_id,
             workstream_id: Some(workstream_id),
-            milestone_id: None,
+            milestone_id,
             title: required_string(arguments, "title")?.to_owned(),
             description: arguments
                 .get("description")
@@ -153,14 +201,63 @@ impl StoreBackend {
                 .unwrap_or_default()
                 .to_owned(),
             status: TaskStatus::Draft,
-            write: false,
-            path_scope: Vec::new(),
-            depends_on: Vec::new(),
+            write,
+            path_scope,
+            depends_on,
             created_at: stamp,
             updated_at: stamp,
         };
         self.store.upsert_task(&task)?;
         Ok(serde_json::to_value(task)?)
+    }
+
+    fn create_milestone(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let project_id = required_id(arguments, "project_id")?;
+        self.store
+            .get_project(&project_id)?
+            .context("project not found")?;
+        let workstream_id = optional_id(arguments, "workstream_id")?;
+        if let Some(id) = &workstream_id {
+            let workstream = self
+                .store
+                .get_workstream(id)?
+                .context("workstream not found")?;
+            if workstream.project_id != project_id {
+                anyhow::bail!("workstream belongs to a different project");
+            }
+        }
+        let status = arguments
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("planned")
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(status.as_str(), "planned" | "active") {
+            anyhow::bail!("milestone.create only accepts planned or active status");
+        }
+        let due_at = arguments
+            .get("due_at")
+            .and_then(Value::as_str)
+            .map(Timestamp::from_str)
+            .transpose()?;
+        let stamp = now();
+        let milestone = Milestone {
+            id: EntityId::new(),
+            project_id,
+            workstream_id,
+            name: required_string(arguments, "name")?.trim().to_owned(),
+            description: arguments
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            status,
+            due_at,
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        self.store.create_milestone(&milestone)?;
+        Ok(serde_json::to_value(milestone)?)
     }
 
     async fn create_dispatch(&self, arguments: &Value) -> anyhow::Result<Value> {
@@ -254,10 +351,52 @@ fn required_id(arguments: &Value, key: &str) -> anyhow::Result<EntityId> {
     EntityId::from_str(required_string(arguments, key)?).map_err(anyhow::Error::from)
 }
 
+fn optional_id(arguments: &Value, key: &str) -> anyhow::Result<Option<EntityId>> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(EntityId::from_str)
+        .transpose()
+        .map_err(anyhow::Error::from)
+}
+
+fn optional_bool(arguments: &Value, key: &str) -> anyhow::Result<Option<bool>> {
+    arguments
+        .get(key)
+        .map(|value| {
+            value
+                .as_bool()
+                .with_context(|| format!("argument must be a boolean: {key}"))
+        })
+        .transpose()
+}
+
+fn optional_string_array(arguments: &Value, key: &str) -> anyhow::Result<Vec<String>> {
+    arguments
+        .get(key)
+        .map(|value| {
+            value
+                .as_array()
+                .with_context(|| format!("argument must be an array: {key}"))?
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|text| !text.trim().is_empty())
+                        .map(str::to_owned)
+                        .with_context(|| format!("{key} entries must be non-empty strings"))
+                })
+                .collect()
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ba_core::{Project, TaskStatus};
+    use ba_core::{Project, TaskStatus, Workstream};
 
     #[tokio::test]
     async fn gate_tool_executes_the_project_configured_command() -> anyhow::Result<()> {
@@ -310,6 +449,94 @@ mod tests {
                 .as_str()
                 .is_some_and(|output| output.contains("rustc"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn milestone_tools_persist_and_report_real_milestones() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "MCP milestone fixture".into(),
+            root_path: directory.path().to_string_lossy().into_owned(),
+            description: "not used as milestone state".into(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        let workstream = Workstream {
+            id: EntityId::new(),
+            project_id: project.id.clone(),
+            name: "Alpha delivery".into(),
+            description: String::new(),
+            status: "active".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_workstream(&workstream)?;
+        let dependency = Task {
+            id: EntityId::new(),
+            project_id: project.id.clone(),
+            workstream_id: Some(workstream.id.clone()),
+            milestone_id: None,
+            title: "Define acceptance boundary".into(),
+            description: String::new(),
+            status: TaskStatus::Completed,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_task(&dependency)?;
+        let backend = StoreBackend {
+            control: RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default())),
+            store,
+            worktree_root: directory.path().join("worktrees"),
+        };
+
+        let created = backend
+            .call_inner(
+                "milestone.create",
+                &json!({
+                    "project_id": project.id,
+                    "workstream_id": workstream.id,
+                    "name": "Personal Alpha",
+                    "description": "Acceptance boundary",
+                    "status": "active",
+                    "due_at": "2026-08-31T00:00:00Z"
+                }),
+            )
+            .await?;
+        assert_eq!(created["name"], "Personal Alpha");
+        assert_eq!(created["status"], "active");
+        let listed = backend
+            .call_inner("milestone.list", &json!({"project_id": project.id}))
+            .await?;
+        assert_eq!(listed.as_array().map(Vec::len), Some(1));
+        assert_eq!(listed[0]["id"], created["id"]);
+
+        let task = backend
+            .call_inner(
+                "task.create",
+                &json!({
+                    "workstream_id": workstream.id,
+                    "milestone_id": created["id"],
+                    "title": "Ship dependency-aware task",
+                    "description": "Created through MCP",
+                    "write": true,
+                    "path_scope": ["apps/console/**"],
+                    "depends_on": [dependency.id]
+                }),
+            )
+            .await?;
+        assert_eq!(task["write"], true);
+        assert_eq!(task["path_scope"], json!(["apps/console/**"]));
+        assert_eq!(task["depends_on"], json!([dependency.id]));
+        assert_eq!(task["milestone_id"], created["id"]);
         Ok(())
     }
 }

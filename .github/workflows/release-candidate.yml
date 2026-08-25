@@ -43,6 +43,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
@@ -51,10 +54,14 @@ jobs:
         with:
           key: release-${{ matrix.rust_target }}
       - run: pnpm install --frozen-lockfile
+      - run: python plugins/personal-marketplace/plugins/ba-agent-control/scripts/validate_bundle.py
+      - run: python plugins/personal-marketplace/plugins/ba-agent-control/scripts/test_hook_guard.py
       - run: pnpm validate
       - run: pnpm build
+      - run: pnpm --dir apps/console exec playwright install --with-deps chromium
+      - run: pnpm --dir apps/console test:e2e
       - run: pnpm licenses:generate
-      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md
+      - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt
       - run: cargo clippy --workspace --all-targets --target ${{ matrix.rust_target }} -- -D warnings
       - run: cargo test --workspace --locked --target ${{ matrix.rust_target }}
       - run: cargo build --release --locked --target ${{ matrix.rust_target }} -p ba-agent-control
@@ -76,6 +83,7 @@ jobs:
         shell: pwsh
         run: |
           $archive = Get-ChildItem dist/release/*.zip | Select-Object -First 1
+          ./scripts/test-install-security.ps1 -Archive $archive.FullName
           $install = Join-Path $env:RUNNER_TEMP 'ba-agent-install-test'
           $data = Join-Path $env:RUNNER_TEMP 'ba-agent-data-test'
           ./scripts/install.ps1 -Archive $archive.FullName -InstallDirectory $install
@@ -89,6 +97,7 @@ jobs:
         shell: bash
         run: |
           archive=$(find dist/release -name '*.tar.gz' -type f | head -n 1)
+          sh scripts/test-install-security.sh "$archive"
           install="$RUNNER_TEMP/ba-agent-install-test"
           data="$RUNNER_TEMP/ba-agent-data-test"
           sh scripts/install.sh install "$archive" "$install"

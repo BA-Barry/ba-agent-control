@@ -295,6 +295,33 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             true,
         ),
         definition(
+            "milestone.list",
+            "List durable milestones for a project.",
+            BTreeMap::from([("project_id", field("Project ULID"))]),
+            &["project_id"],
+            true,
+        ),
+        definition(
+            "milestone.create",
+            "Create a planned or active project milestone through domain validation.",
+            BTreeMap::from([
+                ("project_id", field("Project ULID")),
+                ("workstream_id", field("Optional workstream ULID")),
+                ("name", field("Milestone name")),
+                (
+                    "description",
+                    field("Milestone outcome or acceptance boundary"),
+                ),
+                (
+                    "status",
+                    json!({"type": "string", "enum": ["planned", "active"]}),
+                ),
+                ("due_at", field("Optional UTC RFC3339 due timestamp")),
+            ]),
+            &["project_id", "name"],
+            false,
+        ),
+        definition(
             "task.list",
             "List tasks and dependencies in a workstream.",
             BTreeMap::from([("workstream_id", field("Workstream ULID"))]),
@@ -306,8 +333,18 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             "Create a draft task through domain validation.",
             BTreeMap::from([
                 ("workstream_id", field("Workstream ULID")),
+                ("milestone_id", field("Optional milestone ULID")),
                 ("title", field("Concise task title")),
                 ("description", field("Task acceptance-oriented description")),
+                ("write", json!({"type": "boolean"})),
+                (
+                    "path_scope",
+                    json!({"type": "array", "items": {"type": "string"}}),
+                ),
+                (
+                    "depends_on",
+                    json!({"type": "array", "items": {"type": "string"}}),
+                ),
             ]),
             &["workstream_id", "title"],
             false,

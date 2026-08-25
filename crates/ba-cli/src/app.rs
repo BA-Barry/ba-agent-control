@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, bail};
 use ba_config::{ProjectConfig, Runtime};
 use ba_core::{EntityId, Project, Task, TaskStatus, Workstream, now};
+use ba_git::RepoPath;
 use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
@@ -179,29 +180,70 @@ pub fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow::Resu
         TaskCommand::Add {
             project_id,
             title,
+            description,
             workstream_id,
+            milestone_id,
+            depends_on,
             write,
             path_scope,
         } => {
+            if title.trim().is_empty() {
+                bail!("task title is required");
+            }
             if write && path_scope.is_empty() {
                 bail!("write tasks require at least one --scope");
+            }
+            if !write && !path_scope.is_empty() {
+                bail!("read-only tasks cannot declare --scope; add --write or remove the scope");
+            }
+            for scope in &path_scope {
+                RepoPath::new(scope).with_context(|| format!("invalid write scope: {scope}"))?;
             }
             let project_id = id_of(&project_id)?;
             store
                 .get_project(&project_id)?
                 .context("project not found")?;
+            let workstream_id = workstream_id.as_deref().map(id_of).transpose()?;
+            if let Some(id) = &workstream_id {
+                let workstream = store.get_workstream(id)?.context("workstream not found")?;
+                if workstream.project_id != project_id {
+                    bail!("workstream belongs to a different project");
+                }
+            }
+            let milestone_id = milestone_id.as_deref().map(id_of).transpose()?;
+            if let Some(id) = &milestone_id {
+                let milestone = store.get_milestone(id)?.context("milestone not found")?;
+                if milestone.project_id != project_id {
+                    bail!("milestone belongs to a different project");
+                }
+                if milestone.workstream_id.is_some() && milestone.workstream_id != workstream_id {
+                    bail!("milestone belongs to a different workstream");
+                }
+            }
+            let depends_on = depends_on
+                .iter()
+                .map(|id| id_of(id))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            for dependency_id in &depends_on {
+                let dependency = store
+                    .get_task(dependency_id)?
+                    .context("dependency task not found")?;
+                if dependency.project_id != project_id {
+                    bail!("dependency task belongs to a different project");
+                }
+            }
             let stamp = now();
             let item = Task {
                 id: EntityId::new(),
                 project_id,
-                workstream_id: workstream_id.as_deref().map(id_of).transpose()?,
-                milestone_id: None,
-                title,
-                description: String::new(),
+                workstream_id,
+                milestone_id,
+                title: title.trim().to_owned(),
+                description,
                 status: TaskStatus::Draft,
                 write,
                 path_scope,
-                depends_on: Vec::new(),
+                depends_on,
                 created_at: stamp,
                 updated_at: stamp,
             };

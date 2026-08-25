@@ -6,7 +6,7 @@ Single-binary server, migrations, empty console, plugin skeleton, validation, an
 
 Status: **complete locally (2026-08-24)**.
 
-- Release Windows x64 binary: 8.79 MB, embedded hashed console assets, `doctor=ready`.
+- Latest release Windows x64 binary: 15,843,328 bytes (15.11 MiB), embedded hashed console assets, `doctor=ready`.
 - SQLite migration/integrity checks and loopback security tests pass.
 - CI matrix covers Windows, Ubuntu, and macOS and builds the console before Rust embedding.
 - Plugin bundle validates with 8 roles and 11 Skills; Hooks pass 15/15 tests.
@@ -38,10 +38,19 @@ Status: **complete locally (2026-08-24)**.
 
 All seven surfaces, Chinese/English, light/dark/system themes, responsive and accessible operation, followed by Impeccable and scoped Taste audits. BA Agent begins self-hosting its own backlog.
 
-Status: **waiting at the comp-first decision gate**. No designed console surface has been implemented.
+Status: **feature-complete locally; final self-hosting acceptance in progress (2026-08-25)**.
 
-- Self-hosting has begun with the repository registered in BA Agent and a `personal-alpha` workstream containing the visual gate, console, release, and hardening tasks.
-- The first real Reviewer run used Codex App Server and produced 470 structured events. Fourteen read-only Windows commands were approved individually; rejecting an unsafe destructive reproduction command correctly preserved the repository but currently failed the whole run. The approval-noise/recovery issue is tracked in the self-hosted backlog.
+- The user approved the comp-first “测量员外业簿” direction. All seven console surfaces now use the shared field-book design system with Chinese/English, light/dark/system themes, responsive layouts, keyboard focus, and screen-reader semantics.
+- Impeccable critique, audit, harden, and polish passes completed. Twenty Playwright scenarios cover all seven routes on desktop and Pixel 7 with zero axe violations, plus real milestone/task mutations, keyboard, loading, empty, disconnected, extreme-content, forced-color, 200% text and production Web Vitals checks.
+- The embedded console now authenticates through the random local session, reads real `/api/v1` entities and worktree identity, consumes a forward-compatible `run-event` SSE envelope, and performs real project/task creation, approval, cancellation, guidance, retry/resume, and receipt-verification mutations with CSRF protection.
+- Project milestones are now first-class REST and MCP resources. The console registers a real active milestone, replaces the previous active milestone atomically, derives progress from milestone-linked tasks, and attaches new tasks to the current milestone instead of displaying the project description as synthetic milestone state.
+- Dependency-aware task creation is now consistent across the console, CLI, REST API and MCP: each entry point validates project ownership, optional milestone/workstream alignment, read/write intent and repository-relative write scopes. The console dependency diagram is derived from persisted relationships rather than sample ordering.
+- When the local service is unavailable, the console visibly enters demo fallback mode and reports the cause instead of silently presenting sample records as live data.
+- Production single-binary browser runs loaded real data on all seven routes, registered the BA Agent repository, created a workstream and scoped write task, completed receipt-chain verification, logged no browser errors, and showed no horizontal overflow at 390 × 844.
+- Failed retries preserve their earlier detached worktree and allocate a new attempt-specific worktree. Orphaned runs resume their persisted thread; live runs with a Codex thread use the desktop app's registered `codex://threads/<id>` handoff.
+- One continuous non-model Alpha acceptance test now registers three real Git repositories, admits four agent profiles while rejecting a fifth, isolates three writers, resolves an approval, passes gates, commits three workstream branches, reopens SQLite for orphan/thread recovery, prunes future-expired runtime data, and verifies every permanent receipt chain after another reopen.
+- Self-hosting remains evidence-preserving: the earlier failed Reviewer run and its approval ergonomics issue remain in the backlog rather than being rewritten into a synthetic success.
+- Before closing the milestone, BA Agent still needs three consecutive lossless self-hosted workflows. The native console operations required for the personal Alpha are now implemented and locally verified.
 
 ## M5 — Claude compatibility and migration
 
@@ -62,6 +71,6 @@ Windows x64, Linux x64, macOS x64/arm64 archives; checksums; install/upgrade/rol
 Status: **local release engineering in progress**. No remote repository or release has been created.
 
 - A manual-only candidate workflow targets Windows x64, Linux x64, macOS Intel, and macOS arm64 and uploads Actions artifacts without publishing a Release.
-- Platform packaging emits a portable archive plus SHA-256; install scripts exercise install, upgrade, rollback, uninstall, and explicit runtime-data retention.
-- A deterministic generator inventories the four release targets' union of 273 non-workspace Rust packages and 63 embedded-console runtime packages from locked dependency metadata. License-expression and notice-text review remains required before Public Beta.
-- The Windows lifecycle test passes locally. All four hosted-runner jobs, clean-machine startup, console WCAG 2.2 AA, and public-release authorization remain open.
+- Platform packaging emits a portable archive plus mandatory SHA-256 sidecar; install scripts verify the digest before reading package entries and exercise install, upgrade, rollback, uninstall, and explicit runtime-data retention.
+- A deterministic generator inventories the four release targets' union of 273 non-workspace Rust packages and 63 embedded-console runtime packages, embeds 202 deduplicated full license/notice documents with package mappings, and fails closed when installed notice text is missing. The sole upstream npm omission has a provenance-locked override; release-owner legal review of the expressions remains required.
+- The latest notice-complete Windows candidate contains exactly eight expected files and passes install, upgrade, rollback, uninstall, database retention, checksum-mismatch/traversal/reparse-point rejection, startup/API/memory budgets, production-console Web Vitals, forced-color/200% text regression, and the console WCAG audit. After moving runtime handshake/recovery off the listening critical path, three cold starts measured 624.765 ms, 126.408 ms and 134.076 ms. All four hosted-runner jobs, cross-platform manual assistive-tech confirmation, and public-release authorization remain open.

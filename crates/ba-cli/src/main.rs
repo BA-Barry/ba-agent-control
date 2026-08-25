@@ -102,8 +102,14 @@ enum TaskCommand {
     Add {
         project_id: String,
         title: String,
+        #[arg(long, default_value = "")]
+        description: String,
         #[arg(long)]
         workstream_id: Option<String>,
+        #[arg(long)]
+        milestone_id: Option<String>,
+        #[arg(long = "depends-on")]
+        depends_on: Vec<String>,
         #[arg(long)]
         write: bool,
         #[arg(long = "scope")]
@@ -300,5 +306,54 @@ async fn main() -> anyhow::Result<()> {
         Command::Adapter(args) => app::adapter(args.command, cli.json).await,
         Command::Migrate(args) => migration::run(&paths, args.command, cli.json),
         Command::Mcp => mcp_backend::serve(&paths).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_add_accepts_dependency_milestone_and_write_scope_flags() -> anyhow::Result<()> {
+        let project_id = "01K00000000000000000000000";
+        let milestone_id = "01K00000000000000000000001";
+        let dependency_id = "01K00000000000000000000002";
+        let cli = Cli::try_parse_from([
+            "ba-agent-control",
+            "task",
+            "add",
+            project_id,
+            "Implement dependency support",
+            "--description",
+            "Acceptance-oriented detail",
+            "--milestone-id",
+            milestone_id,
+            "--depends-on",
+            dependency_id,
+            "--write",
+            "--scope",
+            "apps/console/**",
+        ])?;
+
+        let Command::Task(TaskArgs {
+            command:
+                TaskCommand::Add {
+                    description,
+                    milestone_id: parsed_milestone,
+                    depends_on,
+                    write,
+                    path_scope,
+                    ..
+                },
+        }) = cli.command
+        else {
+            anyhow::bail!("task add command was not parsed");
+        };
+        assert_eq!(description, "Acceptance-oriented detail");
+        assert_eq!(parsed_milestone.as_deref(), Some(milestone_id));
+        assert_eq!(depends_on, [dependency_id]);
+        assert!(write);
+        assert_eq!(path_scope, ["apps/console/**"]);
+        Ok(())
     }
 }

@@ -13,7 +13,7 @@ BA Agent's release-candidate workflow is deliberately separate from publication.
 
 The macOS labels follow GitHub's current hosted-runner reference: `macos-15-intel` is Intel and `macos-15` is arm64. Recheck the [official runner table](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) before a Public Beta candidate because labels and images can change.
 
-Every matrix job installs locked dependencies, validates and embeds the console, regenerates the license inventory, runs Clippy and workspace tests for its native target, builds the release binary, packages it, and verifies the complete install lifecycle while retaining a test database.
+Every matrix job installs locked dependencies, validates and embeds the console, regenerates the license inventory, runs Clippy and workspace tests for its native target, builds the release binary, packages it, rejects checksum/traversal/symlink-or-reparse test packages, and verifies the complete install lifecycle while retaining a test database.
 
 ## Local Windows candidate
 
@@ -28,12 +28,11 @@ cargo build --release --locked -p ba-agent-control
   -OutputDirectory dist/release
 ```
 
-The packager refuses to overwrite an existing archive. Each archive contains the binary, BA Agent license and notice, third-party inventory, README, and installation guide. The adjacent `.sha256` file uses the conventional `<digest>  <filename>` format.
+The packager refuses to overwrite an existing archive. Each archive contains the binary, BA Agent license and notice, the third-party inventory, deduplicated full third-party license/notice texts, README, and installation guide. The adjacent `.sha256` file uses the conventional `<digest>  <filename>` format and is mandatory for the bundled installer.
 
 ## Public Beta blockers
 
-- Generate and select the three comp-first console directions, then complete the seven surfaces and WCAG 2.2 AA audit.
 - Run the four-platform candidate workflow on an approved remote repository and retain logs and artifacts.
-- Verify every third-party license expression and bundle all required full license/notice texts; the generated inventory is evidence, not legal approval.
+- Complete the release-owner legal review of every third-party license expression. Full installed license and notice texts are already generated, deduplicated by SHA-256, mapped back to packages, and bundled; the one npm package that omits its declared MIT text has a provenance-locked upstream override.
 - Repeat performance, install, upgrade, rollback, uninstall, and data-retention tests on clean hosts.
 - Obtain explicit user approval before creating the remote repository or publishing tags, releases, or archives.

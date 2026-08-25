@@ -6,7 +6,7 @@ use std::{
 
 use ba_core::{
     ApprovalStatus, Dispatch, EntityId, Gate, GateStatus, Project, Run, RunStatus, Task,
-    TaskStatus, now,
+    TaskStatus, Workstream, now,
 };
 use ba_git::GitOperation;
 use ba_runtime::{CodexVersion, MINIMUM_CODEX_VERSION, RuntimeCapabilities};
@@ -248,6 +248,32 @@ fn dispatch_coordinator_isolates_write_tasks_in_a_detached_worktree()
         .ok_or_else(|| missing("write-task worktree missing"))?;
     assert_eq!(isolated.run_id.as_ref(), Some(&bundle.run.id));
     assert!(std::path::Path::new(&isolated.path).is_dir());
+    fixture
+        .store
+        .transition_run(&bundle.run.id, RunStatus::Starting)?;
+    fixture
+        .store
+        .transition_run(&bundle.run.id, RunStatus::Running)?;
+    fixture
+        .store
+        .transition_task(&candidate.id, TaskStatus::Running)?;
+    fixture.store.finish_run(
+        &bundle.run.id,
+        RunStatus::Failed,
+        "runtime.failed",
+        json!({"attempt": 1}),
+    )?;
+    fixture
+        .store
+        .transition_task(&candidate.id, TaskStatus::Ready)?;
+    let retry = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
+        .enqueue(&candidate.id, None)?;
+    let retried_worktree = retry
+        .worktree
+        .ok_or_else(|| missing("retry worktree missing"))?;
+    assert_ne!(isolated.path, retried_worktree.path);
+    assert!(std::path::Path::new(&isolated.path).is_dir());
+    assert!(std::path::Path::new(&retried_worktree.path).is_dir());
     Ok(())
 }
 
@@ -327,6 +353,393 @@ async fn passed_configured_gates_finalize_local_commit_and_receipt()
     );
     fixture.store.verify_receipt_chain(&candidate.project_id)?;
     assert_eq!(fixture.store.list_receipts(&candidate.project_id)?.len(), 1);
+    Ok(())
+}
+
+struct AlphaFixture {
+    store: SqliteStore,
+    worktree_root: PathBuf,
+    projects: Vec<Project>,
+    profile_ids: Vec<EntityId>,
+    writers: Vec<Task>,
+    reader: Task,
+    fifth: Task,
+}
+
+struct AlphaRuns {
+    writers: Vec<crate::DispatchBundle>,
+    reader: crate::DispatchBundle,
+}
+
+fn initialize_alpha_repository(
+    store: &SqliteStore,
+    repository_root: &Path,
+    suffix: &str,
+) -> Result<(Project, Workstream), Box<dyn std::error::Error>> {
+    let repository = repository_root.join(format!("repo-{suffix}"));
+    std::fs::create_dir_all(repository.join("src"))?;
+    std::fs::create_dir_all(repository.join(".ba-agent"))?;
+    std::fs::write(repository.join("src/base.txt"), format!("base-{suffix}\n"))?;
+    std::fs::write(
+        repository.join(".ba-agent/project.toml"),
+        "[gates]\ncheck = [\"git\", \"diff\", \"--check\"]\n",
+    )?;
+    run_git(&repository, &["init", "-b", "main"])?;
+    run_git(
+        &repository,
+        &["config", "user.email", "test@example.invalid"],
+    )?;
+    run_git(&repository, &["config", "user.name", "BA Agent Test"])?;
+    run_git(&repository, &["add", ".ba-agent", "src/base.txt"])?;
+    run_git(&repository, &["commit", "-m", "base"])?;
+
+    let stamp = now();
+    let project = Project {
+        id: EntityId::new(),
+        name: format!("Acceptance {suffix}"),
+        root_path: repository.to_string_lossy().into_owned(),
+        description: "integrated alpha acceptance repository".into(),
+        language: "en".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    let workstream = Workstream {
+        id: EntityId::new(),
+        project_id: project.id.clone(),
+        name: format!("alpha-{suffix}"),
+        description: "acceptance workstream".into(),
+        status: "active".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    store.upsert_project(&project)?;
+    store.upsert_workstream(&workstream)?;
+    Ok((project, workstream))
+}
+
+fn seed_alpha_fixture(root: &Path) -> Result<AlphaFixture, Box<dyn std::error::Error>> {
+    let store = SqliteStore::open(root.join("state.sqlite3"))?;
+    let profiles = ensure_builtin_agent_profiles(&store)?;
+    assert_eq!(profiles.len(), 8);
+    let repository_root = root.join("repositories");
+    std::fs::create_dir_all(&repository_root)?;
+
+    let mut projects = Vec::new();
+    let mut workstreams = Vec::new();
+    for suffix in ["a", "b", "c"] {
+        let (project, workstream) = initialize_alpha_repository(&store, &repository_root, suffix)?;
+        projects.push(project);
+        workstreams.push(workstream);
+    }
+    assert_eq!(store.list_projects()?.len(), 3);
+
+    let mut dependency = task(&projects[0].id, "completed dependency", false, &[]);
+    dependency.workstream_id = Some(workstreams[0].id.clone());
+    dependency.status = TaskStatus::Completed;
+    store.upsert_task(&dependency)?;
+    let mut writers = Vec::new();
+    for (index, project) in projects.iter().enumerate() {
+        let mut writer = task(&project.id, &format!("writer-{index}"), true, &["src"]);
+        writer.workstream_id = Some(workstreams[index].id.clone());
+        if index == 0 {
+            writer.depends_on.push(dependency.id.clone());
+        }
+        store.upsert_task(&writer)?;
+        writers.push(writer);
+    }
+    assert_eq!(writers[0].depends_on, [dependency.id]);
+
+    let mut reader = task(&projects[2].id, "restart reader", false, &[]);
+    reader.workstream_id = Some(workstreams[2].id.clone());
+    store.upsert_task(&reader)?;
+    let fifth = task(&projects[1].id, "capacity blocked", false, &[]);
+    store.upsert_task(&fifth)?;
+    Ok(AlphaFixture {
+        store,
+        worktree_root: root.join("worktrees"),
+        projects,
+        profile_ids: profiles.into_iter().map(|profile| profile.id).collect(),
+        writers,
+        reader,
+        fifth,
+    })
+}
+
+fn dispatch_alpha_runs(fixture: &AlphaFixture) -> Result<AlphaRuns, Box<dyn std::error::Error>> {
+    let dispatch = DispatchCoordinator::new(fixture.store.clone(), fixture.worktree_root.clone());
+    let mut writers = Vec::new();
+    for (index, writer) in fixture.writers.iter().enumerate() {
+        writers.push(dispatch.enqueue(&writer.id, Some(&fixture.profile_ids[index]))?);
+    }
+    let reader = dispatch.enqueue(&fixture.reader.id, Some(&fixture.profile_ids[3]))?;
+    let paths = writers
+        .iter()
+        .map(|bundle| {
+            bundle
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.path.clone())
+                .ok_or_else(|| missing("writer worktree missing"))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    assert_eq!(paths.len(), 3);
+    assert!(reader.worktree.is_none());
+
+    let capacity_error = dispatch
+        .enqueue(&fixture.fifth.id, Some(&fixture.profile_ids[4]))
+        .err()
+        .ok_or_else(|| missing("a fifth concurrent run was accepted"))?;
+    assert!(capacity_error.to_string().contains("concurrency_limit"));
+    assert_eq!(
+        fixture
+            .store
+            .get_task(&fixture.fifth.id)?
+            .ok_or_else(|| missing("fifth task missing"))?
+            .status,
+        TaskStatus::Ready
+    );
+    Ok(AlphaRuns { writers, reader })
+}
+
+fn activate_alpha_runs(
+    fixture: &AlphaFixture,
+    runs: &AlphaRuns,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (index, bundle) in runs
+        .writers
+        .iter()
+        .chain(std::iter::once(&runs.reader))
+        .enumerate()
+    {
+        fixture
+            .store
+            .transition_run(&bundle.run.id, RunStatus::Starting)?;
+        fixture
+            .store
+            .transition_run(&bundle.run.id, RunStatus::Running)?;
+        fixture
+            .store
+            .transition_task(&bundle.run.task_id, TaskStatus::Running)?;
+        let mut active = fixture
+            .store
+            .get_run(&bundle.run.id)?
+            .ok_or_else(|| missing("active run missing"))?;
+        active.adapter = "codex-app-server".into();
+        active.runtime_run_id = Some(format!("runtime-{index}"));
+        active.runtime_thread_id = Some(format!("thread-{index}"));
+        active.updated_at = now();
+        fixture.store.upsert_run(&active)?;
+        fixture
+            .store
+            .update_dispatch_status(&active.id, "running")?;
+        fixture.store.append_runtime_log(
+            Some(&fixture.projects[index.min(2)].id),
+            Some(&active.id),
+            "info",
+            "acceptance run active",
+        )?;
+    }
+    Ok(())
+}
+
+fn approve_alpha_push(
+    store: &SqliteStore,
+    run_id: &EntityId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let coordinator = ApprovalCoordinator::new(store.clone());
+    let approval = coordinator
+        .request_git_operation(run_id, GitOperation::Push, &json!({ "remote": "origin" }))?
+        .ok_or_else(|| missing("protected push approval missing"))?;
+    assert_eq!(
+        store
+            .get_run(run_id)?
+            .ok_or_else(|| missing("paused writer run missing"))?
+            .status,
+        RunStatus::WaitingApproval
+    );
+    coordinator.resolve(
+        &approval.id,
+        ApprovalResolution::Approve,
+        &json!({ "approved_by": "acceptance-test" }),
+    )?;
+    assert_eq!(
+        store
+            .get_run(run_id)?
+            .ok_or_else(|| missing("resumed writer run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    Ok(())
+}
+
+async fn finalize_alpha_writers(
+    fixture: &AlphaFixture,
+    runs: &AlphaRuns,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (index, (writer, bundle)) in fixture.writers.iter().zip(&runs.writers).enumerate() {
+        let worktree = bundle
+            .worktree
+            .as_ref()
+            .ok_or_else(|| missing("writer worktree missing"))?;
+        std::fs::write(
+            PathBuf::from(&worktree.path)
+                .join("src")
+                .join(format!("feature-{index}.txt")),
+            format!("feature-{index}\n"),
+        )?;
+        fixture.store.finish_run(
+            &bundle.run.id,
+            RunStatus::Succeeded,
+            "runtime.succeeded",
+            json!({ "writer": index }),
+        )?;
+        let definition = configured_gate(Path::new(&fixture.projects[index].root_path), "check")?;
+        let gate = GateCoordinator::new(fixture.store.clone())
+            .run(
+                &writer.id,
+                Some(&bundle.run.id),
+                Path::new(&worktree.path),
+                &definition,
+            )
+            .await?;
+        assert_eq!(gate.status, GateStatus::Passed);
+
+        let finalized =
+            FinalizationCoordinator::new(fixture.store.clone(), fixture.worktree_root.clone())
+                .finalize_if_eligible(&writer.id, Some(&bundle.run.id))?
+                .ok_or_else(|| missing("writer was not finalized"))?;
+        assert!(
+            finalized
+                .git
+                .branch
+                .starts_with(&format!("ba/alpha-{}/", ["a", "b", "c"][index]))
+        );
+        assert_eq!(
+            fixture
+                .store
+                .get_task(&writer.id)?
+                .ok_or_else(|| missing("completed writer missing"))?
+                .status,
+            TaskStatus::Completed
+        );
+        assert_eq!(fixture.store.list_receipts(&writer.project_id)?.len(), 1);
+        fixture.store.verify_receipt_chain(&writer.project_id)?;
+    }
+    Ok(())
+}
+
+fn recover_and_prune_alpha(
+    database_path: &Path,
+    project_ids: &[EntityId],
+    reader_task_id: &EntityId,
+    reader_run_id: &EntityId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let store = SqliteStore::open(database_path)?;
+    assert_eq!(store.list_projects()?.len(), 3);
+    let recovery = RecoveryCoordinator::new(store.clone());
+    let orphaned = recovery.reconcile(&BTreeSet::new(), &capabilities(true))?;
+    assert_eq!(orphaned.len(), 1);
+    assert_eq!(
+        orphaned[0].action,
+        RecoveryAction::Resume {
+            thread_id: "thread-3".into()
+        }
+    );
+    assert_eq!(
+        store
+            .get_run(reader_run_id)?
+            .ok_or_else(|| missing("orphaned reader run missing"))?
+            .status,
+        RunStatus::Orphaned
+    );
+    assert_eq!(
+        store
+            .get_task(reader_task_id)?
+            .ok_or_else(|| missing("blocked reader task missing"))?
+            .status,
+        TaskStatus::Blocked
+    );
+    let live = recovery.reconcile(
+        &BTreeSet::from([reader_run_id.clone()]),
+        &capabilities(true),
+    )?;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].action, RecoveryAction::Live);
+    assert_eq!(
+        store
+            .get_task(reader_task_id)?
+            .ok_or_else(|| missing("resumed reader task missing"))?
+            .status,
+        TaskStatus::Running
+    );
+    store.finish_run(
+        reader_run_id,
+        RunStatus::Succeeded,
+        "runtime.succeeded",
+        json!({ "resumed": true }),
+    )?;
+
+    let prune =
+        store.prune_runtime_data(now() + std::time::Duration::from_secs(90 * 24 * 60 * 60))?;
+    assert!(prune.events >= 5);
+    assert_eq!(prune.logs, 4);
+    for project_id in project_ids {
+        assert_eq!(store.list_receipts(project_id)?.len(), 1);
+        store.verify_receipt_chain(project_id)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn alpha_acceptance_survives_four_way_dispatch_restart_and_retention()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let database_path = root.path().join("state.sqlite3");
+    let fixture = seed_alpha_fixture(root.path())?;
+    let store = fixture.store.clone();
+    let projects = &fixture.projects;
+    let reader = &fixture.reader;
+    let (project_ids, reader_task_id, reader_run_id) = {
+        let runs = dispatch_alpha_runs(&fixture)?;
+        activate_alpha_runs(&fixture, &runs)?;
+        let writer_bundles = &runs.writers;
+        let reader_bundle = &runs.reader;
+        approve_alpha_push(&store, &writer_bundles[0].run.id)?;
+        finalize_alpha_writers(&fixture, &runs).await?;
+
+        assert_eq!(
+            store
+                .get_run(&reader_bundle.run.id)?
+                .ok_or_else(|| missing("reader run missing before restart"))?
+                .status,
+            RunStatus::Running
+        );
+
+        (
+            projects
+                .iter()
+                .map(|project| project.id.clone())
+                .collect::<Vec<_>>(),
+            reader.id.clone(),
+            reader_bundle.run.id.clone(),
+        )
+    };
+
+    drop(store);
+    drop(fixture);
+    recover_and_prune_alpha(
+        &database_path,
+        &project_ids,
+        &reader_task_id,
+        &reader_run_id,
+    )?;
+
+    let reopened = SqliteStore::open(&database_path)?;
+    assert_eq!(reopened.list_projects()?.len(), 3);
+    for project_id in &project_ids {
+        assert_eq!(reopened.list_receipts(project_id)?.len(), 1);
+        reopened.verify_receipt_chain(project_id)?;
+    }
     Ok(())
 }
 

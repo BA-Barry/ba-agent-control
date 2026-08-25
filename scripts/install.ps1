@@ -1,5 +1,6 @@
 param(
     [string]$Archive,
+    [string]$ChecksumFile,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Programs\BA Agent"),
     [switch]$Rollback,
     [switch]$Uninstall
@@ -52,6 +53,19 @@ if ($Rollback) {
 
 if ([string]::IsNullOrWhiteSpace($Archive)) { throw "-Archive is required for install or upgrade" }
 $resolvedArchive = (Resolve-Path -LiteralPath $Archive).Path
+$resolvedChecksum = if ([string]::IsNullOrWhiteSpace($ChecksumFile)) {
+    "$resolvedArchive.sha256"
+} else {
+    (Resolve-Path -LiteralPath $ChecksumFile).Path
+}
+if (!(Test-Path -LiteralPath $resolvedChecksum -PathType Leaf)) {
+    throw "checksum sidecar is required: $resolvedChecksum"
+}
+$checksumText = (Get-Content -LiteralPath $resolvedChecksum -Raw).Trim()
+$expectedHash = ($checksumText -split '\s+')[0].ToLowerInvariant()
+if ($expectedHash -notmatch '^[0-9a-f]{64}$') { throw "checksum sidecar does not start with a valid SHA-256 digest" }
+$actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedArchive).Hash.ToLowerInvariant()
+if ($actualHash -ne $expectedHash) { throw "archive checksum mismatch" }
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ba-agent-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 try {
@@ -63,7 +77,8 @@ try {
         "LICENSE",
         "NOTICE",
         "README.md",
-        "THIRD_PARTY_LICENSES.md"
+        "THIRD_PARTY_LICENSES.md",
+        "THIRD_PARTY_NOTICES.txt"
     )
     $zip = [System.IO.Compression.ZipFile]::OpenRead($resolvedArchive)
     try {

@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 install -m 0755 -- "$binary" "$staging/ba-agent-control"
-for file in README.md LICENSE NOTICE THIRD_PARTY_LICENSES.md; do
+for file in README.md LICENSE NOTICE THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt; do
   install -m 0644 -- "$repository_root/$file" "$staging/$file"
 done
 install -m 0644 -- "$repository_root/docs/installation.md" "$staging/installation.md"

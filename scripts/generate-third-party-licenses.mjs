@@ -1,9 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { statSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 const output = resolve(process.argv[2] ?? "THIRD_PARTY_LICENSES.md");
+const noticesOutput = resolve(process.argv[3] ?? "THIRD_PARTY_NOTICES.txt");
+const licenseOverrides = new Map([
+  ["npm:react-remove-scroll-bar@2.3.8", resolve("third_party/licenses/react-remove-scroll-bar-2.3.8-LICENSE")],
+]);
 const cargo = process.env.CARGO
   ?? resolve(homedir(), ".cargo", "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
 const releaseTargets = [
@@ -52,6 +57,9 @@ const rust = [...packageById.values()]
     version: pkg.version,
     license: pkg.license,
     source: pkg.repository ?? pkg.homepage ?? pkg.source ?? "",
+    ecosystem: "Rust",
+    packageRoot: dirname(pkg.manifest_path),
+    declaredLicenseFile: pkg.license_file,
   }))
   .sort(byNameAndVersion);
 assertKnownLicenses("Rust", rust);
@@ -66,6 +74,9 @@ for (const [license, packages] of Object.entries(groupedFrontend)) {
         version,
         license: pkg.license ?? license,
         source: pkg.homepage ?? "",
+        ecosystem: "npm",
+        packageRoot: packageRootForVersion(pkg, version),
+        declaredLicenseFile: null,
       };
       frontendByKey.set(`${item.name}@${item.version}`, item);
     }
@@ -96,7 +107,9 @@ const lines = [
   ...frontend.map(tableRow),
 ];
 writeFileSync(output, `${lines.join("\n")}\n`, "utf8");
-process.stdout.write(`wrote ${output} (${rust.length} Rust, ${frontend.length} frontend packages)\n`);
+const notices = collectNotices([...rust, ...frontend]);
+writeFileSync(noticesOutput, renderNotices(notices), "utf8");
+process.stdout.write(`wrote ${output} and ${noticesOutput} (${rust.length} Rust, ${frontend.length} frontend packages, ${notices.size} unique notice documents)\n`);
 
 function run(program, args) {
   let executable = program;
@@ -132,6 +145,94 @@ function findOnPath(program, extensions) {
     }
   }
   return null;
+}
+
+function packageRootForVersion(pkg, version) {
+  for (const candidate of pkg.paths ?? []) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
+      if (manifest.version === version) return candidate;
+    } catch {
+      // Try the next installed package location.
+    }
+  }
+  return pkg.paths?.[0] ?? null;
+}
+
+function collectNotices(packages) {
+  const byDigest = new Map();
+  const missing = [];
+  for (const pkg of packages) {
+    const files = licenseFiles(pkg);
+    if (files.length === 0) {
+      missing.push(`${pkg.ecosystem}:${pkg.name}@${pkg.version}`);
+      continue;
+    }
+    for (const file of files) {
+      const content = readFileSync(file.path, "utf8").replaceAll("\r\n", "\n").trim();
+      if (!content) continue;
+      const digest = createHash("sha256").update(content, "utf8").digest("hex");
+      const entry = byDigest.get(digest) ?? { content, packages: [] };
+      entry.packages.push({
+        ecosystem: pkg.ecosystem,
+        name: pkg.name,
+        version: pkg.version,
+        file: file.name,
+      });
+      byDigest.set(digest, entry);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`packages missing installed license/notice text: ${missing.join(", ")}`);
+  }
+  return new Map([...byDigest.entries()].sort(([left], [right]) => compare(left, right)));
+}
+
+function licenseFiles(pkg) {
+  if (!pkg.packageRoot) return [];
+  const candidates = new Map();
+  const override = licenseOverrides.get(`${pkg.ecosystem}:${pkg.name}@${pkg.version}`);
+  if (override) candidates.set(override, { path: override, name: "BA Agent verified upstream override" });
+  if (pkg.declaredLicenseFile) {
+    const path = resolve(pkg.packageRoot, pkg.declaredLicenseFile);
+    try {
+      if (statSync(path).isFile()) candidates.set(path, { path, name: pkg.declaredLicenseFile });
+    } catch {
+      // The package-root scan below may still find conventional license files.
+    }
+  }
+  try {
+    for (const entry of readdirSync(pkg.packageRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^(?:licen[cs]e|copying|notice|copyright|unlicense)(?:$|[._-])/iu.test(entry.name)) continue;
+      const path = join(pkg.packageRoot, entry.name);
+      candidates.set(path, { path, name: entry.name });
+    }
+  } catch {
+    return [...candidates.values()];
+  }
+  return [...candidates.values()].sort((left, right) => compare(left.name.toLowerCase(), right.name.toLowerCase()));
+}
+
+function renderNotices(notices) {
+  const lines = [
+    "BA Agent third-party license and notice texts",
+    "",
+    "Generated from the installed, locked Rust and embedded-console runtime packages.",
+    "Identical documents are deduplicated by SHA-256; every package-to-document mapping remains listed.",
+    "",
+  ];
+  for (const [digest, entry] of notices) {
+    lines.push("=".repeat(80), `SHA-256: ${digest}`, "Packages:");
+    for (const pkg of entry.packages.sort((left, right) =>
+      compare(left.ecosystem, right.ecosystem)
+      || compare(left.name, right.name)
+      || compare(left.version, right.version)
+      || compare(left.file, right.file))) {
+      lines.push(`- ${pkg.ecosystem}:${pkg.name}@${pkg.version} (${pkg.file})`);
+    }
+    lines.push("-".repeat(80), entry.content, "");
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function assertKnownLicenses(label, packages) {
