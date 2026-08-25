@@ -261,9 +261,19 @@ test('a live project can register a real milestone from the console', async ({ p
     dueAt: '2026-08-31T23:59:59.000Z',
   })
   await expect(page.getByRole('status').filter({ hasText: '当前里程碑已登记' })).toBeVisible()
+  await expectNoA11yViolations(page)
+})
+
+test('a live task draft preserves milestone and dependency associations', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
   await page.goto('/workflows')
+  await expect(page.getByText('实时数据', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '工作流与任务导线' }).last()).toBeVisible()
   await page.getByRole('button', { name: '新建任务' }).click()
-  await page.getByLabel('前置任务（可多选）').selectOption('01LONGTASK000000000000000001')
+  const dependencySelect = page.getByLabel('前置任务（可多选）')
+  await expect(dependencySelect).toBeVisible()
+  await dependencySelect.selectOption('01LONGTASK000000000000000001')
   await page.getByLabel('任务标题').fill('验证当前里程碑关联')
   const taskRequestPromise = page.waitForRequest((candidate) =>
     candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/tasks')
