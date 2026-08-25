@@ -12,7 +12,25 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level high
+
   package:
+    needs: audit
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +67,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.rust_target }}
@@ -62,8 +80,9 @@ jobs:
       - run: pnpm --dir apps/console test:e2e
       - run: pnpm licenses:generate
       - run: git diff --exit-code -- THIRD_PARTY_LICENSES.md THIRD_PARTY_NOTICES.txt
-      - run: cargo clippy --workspace --all-targets --target ${{ matrix.rust_target }} -- -D warnings
-      - run: cargo test --workspace --locked --target ${{ matrix.rust_target }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked --target ${{ matrix.rust_target }} -- -D warnings
+      - run: cargo test --workspace --all-features --locked --target ${{ matrix.rust_target }}
       - run: cargo build --release --locked --target ${{ matrix.rust_target }} -p ba-agent-control
       - name: Verify Windows performance budgets
         if: runner.os == 'Windows'
