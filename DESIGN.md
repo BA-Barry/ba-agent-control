@@ -14,7 +14,7 @@ colors:
   traverse-green: "#2b675b"
   traverse-green-deep: "#214e45"
   traverse-green-soft: "#dce8e1"
-  capacity-brass: "#885a1d"
+  capacity-brass: "#805217"
   capacity-brass-soft: "#ead9b8"
   risk-red: "#a3453f"
   risk-red-soft: "#f0dcda"

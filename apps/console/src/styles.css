@@ -13,7 +13,7 @@
   --green: #2b675b;
   --green-deep: #214e45;
   --green-soft: #dce8e1;
-  --brass: #885a1d;
+  --brass: #805217;
   --brass-soft: #ead9b8;
   --red: #a3453f;
   --red-soft: #f0dcda;
@@ -487,8 +487,8 @@ a { color: inherit; text-underline-offset: .2em; }
 .empty-register .control-symbol { flex: 0 0 auto; color: var(--green); }
 .empty-register h3 { margin: 0; font-size: 15px; }
 .empty-register p { max-width: 58ch; margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
-.operation-feedback { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid var(--green); background: var(--green-soft); color: var(--green-deep); font-size: 10px; }
-.operation-feedback.is-error { border-left-color: var(--red); background: var(--red-soft); color: var(--red); }
+.operation-feedback { margin: 16px 0 0; padding: 10px 12px; border: 1px solid var(--green); background: var(--green-soft); color: var(--green-deep); font-size: 10px; }
+.operation-feedback.is-error { border-color: var(--red); background: var(--red-soft); color: var(--red); }
 .operation-panel { display: grid; gap: 18px; margin-top: 20px; padding: 20px; border: 1px solid var(--ink); background: var(--paper-raised); box-shadow: var(--shadow); }
 .operation-panel header h3 { margin: 6px 0 0; font-size: 16px; }
 .operation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
