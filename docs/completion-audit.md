@@ -5,6 +5,7 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 ## Status legend
 
 - **Proven locally** — implemented and exercised by an automated test, local release candidate, or recorded live run.
+- **Proven hosted** — exercised successfully on the named clean GitHub-hosted runner and tied to an immutable commit and workflow run.
 - **Proven in parts** — an aggregate requirement has strong component evidence but still lacks one or more certification checks named in that requirement.
 - **Pending external** — requires a clean hosted platform, remote repository, legal owner, or explicit publication authorization.
 - **Blocked externally** — the implementation is ready, but the authenticated Codex account cannot currently complete the run.
@@ -13,12 +14,12 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 
 | Milestone | Status | Reproducible evidence | Remaining gate |
 | --- | --- | --- | --- |
-| M1 Foundation | Proven locally | Embedded single binary, SQLite migrations/integrity, plugin bundle, 3-OS CI definition, 92 Windows / 91 Linux non-model Rust tests and console suites | Hosted CI has not run without a user-approved remote |
+| M1 Foundation | Proven locally and hosted | Embedded single binary, SQLite migrations/integrity, plugin bundle, and the green Windows/Ubuntu/macOS, console and dependency-audit jobs in [CI run 32866913236](https://github.com/BA-Lau/ba-agent-control/actions/runs/32866913236) | None |
 | M2 Core vertical slice | Proven locally | Transactional state tests, temporary Git/worktree tests, App Server fixture/live contract, gates, local commit, receipts, restart recovery | None for local Alpha |
 | M3 Complete Codex control | Proven locally | Live single-turn and four-parallel-Agent demonstrations, fifth-run capacity rejection, approvals, messages, Hooks, recovery, exec fallback, credential-safe GitHub adapter | None for local Alpha |
-| M4 Personal Alpha console | Proven locally | 22 Playwright/axe scenarios cover seven routes, desktop/Pixel 7, Chinese/English, light/dark, real milestone/task mutations, truthful runtime authentication/degradation, keyboard skip, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; three consecutive real self-hosted workflows survived intervening restarts with 84 ordered events, 18 passed gates and three chained receipts | None for local Alpha |
+| M4 Personal Alpha console | Proven locally and hosted | 24 functional/accessibility Playwright scenarios plus two isolated performance scenarios cover seven routes, desktop/Pixel 7, Chinese/English, light/dark, real milestone/task mutations, truthful runtime authentication/degradation, keyboard operation, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; three consecutive real self-hosted workflows survived intervening restarts with 84 ordered events, 18 passed gates and three chained receipts | Manual assistive-technology certification remains a Public Beta gate |
 | M5 Claude compatibility and migration | Proven locally | Canonical generator, checksum-managed merges, compatibility report, TheAgency dry-run/apply import, runtime-state evidence repair and hash-chain tests | Claude live dispatch is intentionally outside Alpha |
-| M6 Public Beta | Proven locally on Windows and WSL2 Linux; pending hosted/macOS certification | Notice-complete Windows and native Linux archives, mandatory SHA-256 verification, install/upgrade/rollback/uninstall/data retention, malicious archive/checksum/link tests, performance samples | Four hosted targets, clean-machine startup, legal review, manual assistive-tech pass, and publication approval |
+| M6 Public Beta | Four-platform hosted candidate proven; final human gates pending | [Release-candidate run 32866937107](https://github.com/BA-Lau/ba-agent-control/actions/runs/32866937107) at commit `542abe5241c4d35418700b3c5272b93aef685f7a` passed dependency audits and native Windows x64, Linux x64, macOS Intel and macOS ARM build/test/performance/package/security/lifecycle jobs; downloaded archives were independently checksum- and entry-verified | Manual assistive-tech checks, release-owner legal review and explicit publication approval |
 
 ## Requirement coverage
 
@@ -77,13 +78,13 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| Deterministic third-party inventory and full notices | Proven locally | 273 Rust and 63 runtime npm packages; 202 deduplicated documents; generation diff gate |
-| Windows archive and lifecycle | Proven locally | Exact eight-entry archive, checksum, install, upgrade, rollback, uninstall and retained SQLite data |
-| Malicious package rejection | Proven locally on Windows | Checksum mismatch, traversal archive and reparse-point installation tests |
-| Linux/macOS archives and lifecycle | Proven locally for Linux; pending external for macOS | Native WSL2 Linux build passed strict Clippy, 89 applicable non-model tests, packaging, checksum/traversal/symlink rejection, lifecycle and performance budgets; macOS still requires hosted native runners |
-| Core startup/API/memory budgets | Proven locally | Final Windows release samples: startup 827.557/142.794/183.179 ms, API p95 6.441/6.336/6.555 ms, memory 14.53–14.57 MiB; clean-host target certification remains pending |
-| UI LCP/INP/CLS budgets | Proven locally | Production-build observations stayed within budget: desktop LCP 452–616 ms / INP 72–96 ms / CLS 0–0.0226; Pixel 7 LCP 392–504 ms / INP 56–80 ms / CLS 0; clean-host target certification remains pending |
-| No P0/P1 defects | Pending release audit | Current local automated suites pass, but hosted candidates and manual assistive-tech validation are outstanding |
+| Deterministic third-party inventory and full notices | Proven locally and hosted | 273 Rust and 39 runtime frontend packages; 196 deduplicated documents; generation diff gate passed on all four hosted package jobs |
+| Windows archive and lifecycle | Proven hosted | Eight-entry archive SHA-256 `6c7e6b1632259d3fecf93de7d8c04db2d7012ce1170da9034ed45453237fdb51`; hosted install, upgrade, rollback, uninstall and retained SQLite data passed |
+| Malicious package rejection | Proven hosted | Windows checksum/traversal/reparse-point and Unix checksum/traversal/symlink tests passed natively |
+| Linux/macOS archives and lifecycle | Proven hosted | Linux x64, macOS Intel and macOS ARM native package, checksum, install, upgrade, rollback, uninstall, data-retention and malicious-package tests passed in run 32866937107 |
+| Core startup/API/memory budgets | Proven hosted | Cold start was 76.620–161.310 ms, API p95 0.410–1.965 ms and idle memory 6.91–12.65 MiB across all four clean hosted targets |
+| UI LCP/INP/CLS budgets | Proven hosted | Across all four hosted targets, desktop LCP 152–464 ms / INP 24–144 ms / CLS 0.02253 and mobile LCP 160–408 ms / INP 24–120 ms / CLS 0; all budgets passed |
+| No P0/P1 defects | Proven for automated gates; manual audit pending | CI and the complete hosted candidate matrix are green with zero failed automated gates; manual screen-reader, native high-contrast/zoom and legal sign-off remain |
 
 ## Alpha acceptance scenario
 
@@ -93,9 +94,8 @@ This deterministic test proves orchestration and persistence without consuming m
 
 ## Remaining blockers and next actions
 
-1. With explicit user authorization, create or select a remote repository and execute the four-target release-candidate workflow.
-2. On clean candidates, record first-ever startup plus UI LCP, INP and CLS; investigate any budget miss instead of discarding the first sample.
-3. Complete manual screen-reader, native Windows high-contrast and browser 200% zoom checks, then perform the release-owner third-party license review.
-4. Only after those gates pass, request separate approval for tags, GitHub Release or public archives.
+1. Complete a manual screen-reader pass plus native Windows High Contrast and actual browser 200% zoom checks.
+2. Have the release owner review the generated third-party inventory and full notice bundle.
+3. Only after those gates pass, request separate approval for public repository visibility, a version tag, GitHub Release and public archives.
 
-No remote repository, credential registration, tag, release, push, merge or deployment is authorized by this audit.
+A private verification remote, authenticated push, CI and hosted candidate workflow were explicitly authorized and completed. Public visibility, tags, GitHub Releases, public archives and deployment remain unauthorized.

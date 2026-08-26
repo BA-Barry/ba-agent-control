@@ -1,6 +1,6 @@
 # Performance evidence
 
-Measurements are local development evidence, not release-candidate certification. Release builds and all target platforms must be measured again before Public Beta.
+This document preserves both local development measurements and the final private hosted release-candidate certification. The hosted section supersedes earlier open clean-host risks while retaining the earlier measurements as an audit trail.
 
 ## 2026-08-24 — Windows x64 development build
 
@@ -101,4 +101,41 @@ The Unix installer rejected checksum mismatch, traversal entries and a symlink i
 | Common local API p95 `< 100 ms` | 2.203 ms; 2.165 ms; 1.992 ms | Pass |
 | Core idle memory `< 100 MB` | 12.57–12.88 MiB | Pass |
 
-This is native Linux execution, but still not a clean hosted Ubuntu candidate: the mounted Windows workspace and warm WSL kernel can affect timings. A native Codex CLI 0.149.1 was installed and its App Server capability was detected, while `codex login status` confirmed that the WSL-specific session was not authenticated. The hardened runtime now reports `authenticated=false`, `available=false`, and `doctor=attention` with an explicit `codex login` action; the already authenticated Windows Codex CLI remains `doctor=ready`. Hosted Ubuntu certification and a real WSL Codex turn remain open.
+At this checkpoint the mounted Windows workspace and warm WSL kernel meant the result was not yet a clean hosted Ubuntu candidate. A native Codex CLI 0.149.1 was installed and its App Server capability was detected, while `codex login status` confirmed that the WSL-specific session was not authenticated. The hardened runtime correctly reported `authenticated=false`, `available=false`, and `doctor=attention` with an explicit `codex login` action; the already authenticated Windows Codex CLI remained `doctor=ready`. The hosted section below closes Ubuntu release certification; a real authenticated WSL Codex turn still requires logging in within that separate WSL environment.
+
+## 2026-08-25 UTC / 2026-08-26 CST — Four-platform hosted candidate
+
+[Release-candidate run 32866937107](https://github.com/BA-Lau/ba-agent-control/actions/runs/32866937107) certified commit `542abe5241c4d35418700b3c5272b93aef685f7a` on clean GitHub-hosted Windows x64, Ubuntu x64, macOS Intel and macOS ARM runners. The RustSec and production npm audits passed before the matrix started. Every target then passed 24 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, native release build, performance budgets, packaging, malicious-package rejection and the complete install lifecycle with retained SQLite data.
+
+### Core budgets
+
+| Target | Cold start `< 1 s` | API p95 `< 100 ms` | Idle memory `< 100 MiB` | Result |
+| --- | ---: | ---: | ---: | --- |
+| Windows x64 | 161.310 ms | 1.965 ms | 12.65 MiB | Pass |
+| Linux x64 | 81.904 ms | 0.410 ms | 12.16 MiB | Pass |
+| macOS Intel | 106.743 ms | 1.395 ms | 6.91 MiB | Pass |
+| macOS ARM | 76.620 ms | 0.501 ms | 9.44 MiB | Pass |
+
+The Windows sample retained an isolated 356.629 ms API maximum in the evidence; the stated budget is p95, which was 1.965 ms. No sample or outlier was discarded.
+
+### Embedded console Web Vitals
+
+| Hosted target | Desktop LCP / INP / CLS | Mobile LCP / INP / CLS | Result |
+| --- | ---: | ---: | --- |
+| Windows x64 | 464 ms / 32 ms / 0.02253 | 408 ms / 24 ms / 0 | Pass |
+| Linux x64 | 296 ms / 24 ms / 0.02253 | 276 ms / 24 ms / 0 | Pass |
+| macOS Intel | 364 ms / 144 ms / 0.02253 | 244 ms / 120 ms / 0 | Pass |
+| macOS ARM | 152 ms / 40 ms / 0.02253 | 160 ms / 24 ms / 0 | Pass |
+
+All observations remained below LCP 1.5 seconds, INP 200 ms and CLS 0.1. Functional/accessibility and performance scenarios were intentionally executed in separate Playwright invocations, with one performance worker, so runner contention could not mask a product regression or create a false budget failure.
+
+### Downloaded artifact verification
+
+| Target | Archive bytes | Inner archive SHA-256 | Files |
+| --- | ---: | --- | ---: |
+| Windows x64 | 6,214,773 | `6c7e6b1632259d3fecf93de7d8c04db2d7012ce1170da9034ed45453237fdb51` | 8 |
+| Linux x64 | 6,323,251 | `2ad62efa177f4bf627d9f78f15b4ef47bc70218ffdd38f1767b88ae3953f9172` | 8 |
+| macOS Intel | 5,818,116 | `c81d07b88837d779a7153fefab53a74ba0b0408e388fb163f782db033086fa74` | 8 |
+| macOS ARM | 5,489,324 | `3b1516ee40a0ac0cd2b82467b5ce1e7d4f4a2317b1d038b29da9493877b9ec02` | 8 |
+
+After downloading the four workflow artifacts, the adjacent checksum files were parsed and every inner archive was rehashed locally. All four matched. ZIP/tar entry inspection found exactly the expected binary, installer, installation guide, README, BA Agent license and notice, third-party inventory and deduplicated notice bundle on every platform.
