@@ -142,16 +142,15 @@ BA Agent 采用已经批准并实现的 A+B 方向：A 是“控制点—导线�
 
 ## Colors
 
-浅色主题像长期使用但整洁的外业纸张；深色主题保留同一信息层级，把纸、墨、规则线和状态色成组反转，而不是简单套黑色滤镜。frontmatter 中记录默认“测量绿”配色，实际 CSS 以语义变量提供四套可持久化配色；配色改变纸面、导线、侧栏和交互强调，不改变风险、等待与成功的业务含义。
+浅色模式像长期使用但整洁的工作纸；深色模式保留同一信息层级，把表面、墨色、规则线和状态色成组反转，而不是简单套黑色滤镜。frontmatter 中记录默认“外业簿”主题。主题切换必须改变布局骨架、表面材质、控件语法和扫描顺序，不能只替换颜色值。
 
-### Palette variants
+### Interface themes
 
-- **测量绿 `fieldbook`**：默认方向，氧化绿仪器、暖纸与黄铜刻度；与批准构图完全一致。
-- **蓝图蓝 `blueprint`**：冷白/深蓝纸面与工程蓝导线，适合偏制图和高信息密度的工作环境。
-- **石墨灰 `graphite`**：冷灰纸面与低饱和钢蓝导线，降低长时间使用时的色彩负荷。
-- **暖砂棕 `sand`**：暖纸、深棕侧栏与测量木器色导线，强化外业簿的纸张和黄铜质感。
+- **外业簿 `fieldbook`**：批准的默认方向，保留左侧控制点索引、中央导线、右侧行动账页、纸张网格、方正控件和印章；不得因新增主题而漂移。
+- **航图台 `chartroom`**：把侧栏重组为顶部坐标轨，项目控制点索引收起；主工作面使用主/次网格、菱形测站、描图边界和等宽标题，形成横向制图台的阅读路径。
+- **信号台 `signalroom`**：保留左侧操作 rail，但导航、服务状态和内容仪器分隔成独立模块；主工作面取消纸张纵横网格，改为水平信号基线、紧凑状态带、圆角仪器边界和更短的顶部 datum。
 
-每套配色都单独定义浅色与深色 surface、ink、rule、route accent、sidebar 和 focus/selection 组合。成功色使用独立的 `--success*` 语义 token；等待仍使用 `--brass*`，风险仍使用 `--red*`，同时保留文字、图标、位置或形状作为非颜色线索。
+三个主题共享业务内容、路由、语义状态、键盘顺序和 API 行为，并分别支持浅色与深色模式。成功使用独立 `--success*` token，等待使用 `--brass*`，风险使用 `--red*`；状态同时保留文字、图标、位置或形状作为非颜色线索。
 
 ### Primary
 
@@ -293,7 +292,7 @@ BA Agent 采用已经批准并实现的 A+B 方向：A 是“控制点—导线�
 
 ### 主题、语言与交互状态
 
-- 明暗模式支持 system/light/dark 并持久化；system 跟随 `prefers-color-scheme`。页面配色支持 fieldbook/blueprint/graphite/sand 并独立持久化；两者组合后同步设置 `data-theme`、`data-palette`、`color-scheme` 和浏览器 `theme-color`。
+- 明暗模式支持 system/light/dark 并持久化；system 跟随 `prefers-color-scheme`。界面主题支持 fieldbook/chartroom/signalroom 并独立持久化；两者组合后同步设置 `data-theme`、`data-visual-theme`、`color-scheme` 和浏览器 `theme-color`。
 - Windows `forced-colors` 下侧栏禁用自身调色并使用 `Canvas`、`CanvasText`、`Highlight` 与 `HighlightText`；当前项的文字、图标、编号和背景必须成组切换，不能把普通 `LinkText` 假设为在所有对比度主题中都可见。
 - 语言支持中文/English 并持久化；中文为默认，所有核心流程在两个语言下保持等价。
 - 主要可操作项使用 button、link、select 等原生/语义控件；装饰 SVG 和图标设置 `aria-hidden`，链图有可读 `aria-label`。

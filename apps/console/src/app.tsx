@@ -66,15 +66,15 @@ import type { ApprovalSummary, ConsoleSnapshot, RunEvent, RunStatus, TaskStatus,
 
 type Language = 'zh' | 'en'
 type ThemePreference = 'system' | 'light' | 'dark'
-type ColorPalette = 'fieldbook' | 'blueprint' | 'graphite' | 'sand'
+type VisualTheme = 'fieldbook' | 'chartroom' | 'signalroom'
 
 interface UiSettings {
   language: Language
   setLanguage: (language: Language) => void
   theme: ThemePreference
   setTheme: (theme: ThemePreference) => void
-  palette: ColorPalette
-  setPalette: (palette: ColorPalette) => void
+  visualTheme: VisualTheme
+  setVisualTheme: (visualTheme: VisualTheme) => void
 }
 
 const UiSettingsContext = createContext<UiSettings | null>(null)
@@ -115,7 +115,7 @@ const navItems = [
 
 function DisplaySettingsControl() {
   const text = useText()
-  const { language, setLanguage, theme, setTheme, palette, setPalette } = useUiSettings()
+  const { language, setLanguage, theme, setTheme, visualTheme, setVisualTheme } = useUiSettings()
   const [open, setOpen] = useState(false)
   const controlRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -196,17 +196,16 @@ function DisplaySettingsControl() {
           <RadioGroup.Item className="settings-choice" value="dark"><Moon size={15} aria-hidden="true" />{text('深色', 'Dark')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
         </RadioGroup.Root>
         <div className="settings-separator" role="separator" />
-        <div className="settings-label" id="palette-settings-label">{text('页面配色', 'Color palette')}</div>
+        <div className="settings-label" id="visual-theme-settings-label">{text('界面主题', 'Interface theme')}</div>
         <RadioGroup.Root
           className="settings-radio-group"
-          aria-labelledby="palette-settings-label"
-          value={palette}
-          onValueChange={(value) => choose(() => setPalette(value as ColorPalette))}
+          aria-labelledby="visual-theme-settings-label"
+          value={visualTheme}
+          onValueChange={(value) => choose(() => setVisualTheme(value as VisualTheme))}
         >
-          <RadioGroup.Item className="settings-choice" value="fieldbook"><span className="palette-swatch palette-swatch-field" aria-hidden="true" />{text('测量绿', 'Survey green')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
-          <RadioGroup.Item className="settings-choice" value="blueprint"><span className="palette-swatch palette-swatch-blueprint" aria-hidden="true" />{text('蓝图蓝', 'Blueprint blue')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
-          <RadioGroup.Item className="settings-choice" value="graphite"><span className="palette-swatch palette-swatch-graphite" aria-hidden="true" />{text('石墨灰', 'Graphite gray')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
-          <RadioGroup.Item className="settings-choice" value="sand"><span className="palette-swatch palette-swatch-sand" aria-hidden="true" />{text('暖砂棕', 'Warm sand')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="fieldbook"><span className="theme-mark theme-mark-fieldbook" aria-hidden="true" />{text('外业簿（原版）', 'Field book · original')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="chartroom"><span className="theme-mark theme-mark-chartroom" aria-hidden="true" />{text('航图台', 'Chart room')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
+          <RadioGroup.Item className="settings-choice" value="signalroom"><span className="theme-mark theme-mark-signalroom" aria-hidden="true" />{text('信号台', 'Signal room')}<RadioGroup.Indicator>●</RadioGroup.Indicator></RadioGroup.Item>
         </RadioGroup.Root>
       </div>
     </div>
@@ -809,7 +808,7 @@ function QualityPage() {
 
 function SettingsPage() {
   const text = useText()
-  const { language, setLanguage, theme, setTheme, palette, setPalette } = useUiSettings()
+  const { language, setLanguage, theme, setTheme, visualTheme, setVisualTheme } = useUiSettings()
   const { data } = useConsoleSnapshot()
   const runtime = data.runtime
   const appServerReady = data.source === 'live' && runtime.available && runtime.appServer
@@ -833,7 +832,7 @@ function SettingsPage() {
           ? text('登录后可用', 'Available after login')
           : text('不可用', 'Unavailable')
   return <section className="register-page"><PageHeader titleZh="设置与适配器" titleEn="Settings and adapters" descriptionZh="完全本地、默认无遥测；运行时能力差异明确显示，不保存模型凭据。" descriptionEn="Local-only with no default telemetry; runtime capability differences stay visible and model credentials are not stored." />
-    <div className="settings-layout"><fieldset><legend>{text('界面', 'Interface')}</legend><label>{text('语言', 'Language')}<select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="zh">中文</option><option value="en">English</option></select></label><label>{text('明暗模式', 'Appearance')}<select value={theme} onChange={(event) => setTheme(event.target.value as ThemePreference)}><option value="system">{text('跟随系统', 'System')}</option><option value="light">{text('浅色', 'Light')}</option><option value="dark">{text('深色', 'Dark')}</option></select></label><label>{text('页面配色', 'Color palette')}<select value={palette} onChange={(event) => setPalette(event.target.value as ColorPalette)}><option value="fieldbook">{text('测量绿', 'Survey green')}</option><option value="blueprint">{text('蓝图蓝', 'Blueprint blue')}</option><option value="graphite">{text('石墨灰', 'Graphite gray')}</option><option value="sand">{text('暖砂棕', 'Warm sand')}</option></select></label><label>{text('详细日志保留', 'Detailed log retention')}<select defaultValue="90"><option value="30">30 {text('天', 'days')}</option><option value="90">90 {text('天', 'days')}</option><option value="180">180 {text('天', 'days')}</option></select></label></fieldset>
+    <div className="settings-layout"><fieldset><legend>{text('界面', 'Interface')}</legend><label>{text('语言', 'Language')}<select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="zh">中文</option><option value="en">English</option></select></label><label>{text('明暗模式', 'Appearance')}<select value={theme} onChange={(event) => setTheme(event.target.value as ThemePreference)}><option value="system">{text('跟随系统', 'System')}</option><option value="light">{text('浅色', 'Light')}</option><option value="dark">{text('深色', 'Dark')}</option></select></label><label>{text('界面主题', 'Interface theme')}<select value={visualTheme} onChange={(event) => setVisualTheme(event.target.value as VisualTheme)}><option value="fieldbook">{text('外业簿（原版）', 'Field book · original')}</option><option value="chartroom">{text('航图台', 'Chart room')}</option><option value="signalroom">{text('信号台', 'Signal room')}</option></select></label><label>{text('详细日志保留', 'Detailed log retention')}<select defaultValue="90"><option value="30">30 {text('天', 'days')}</option><option value="90">90 {text('天', 'days')}</option><option value="180">180 {text('天', 'days')}</option></select></label></fieldset>
       <section className="adapter-register"><header><h3>{text('运行时适配器', 'Runtime adapters')}</h3><span className="mono">CODEX {runtime.version ?? '≥ 0.130.0'}</span></header><article><span className="adapter-mark">{appServerReady ? <CheckCircle /> : <WarningCircle />}</span><div><strong>Codex App Server</strong><p>{text('实时线程、工具、审批、事件与恢复。', 'Live threads, tools, approvals, events, and recovery.')}</p>{runtime.degradedReason && <p title={runtime.degradedReason}>{!runtime.version ? text('请先安装受支持的 Codex CLI。', 'Install a supported Codex CLI first.') : !runtime.authenticated ? text('Codex CLI 尚未登录；请在终端运行 codex login。', 'Codex CLI is not signed in; run codex login in a terminal.') : text('App Server 当前不可用，已保留稳定降级路径。', 'App Server is unavailable; the stable fallback remains available.')}</p>}</div><span className={clsx('status-text', appServerReady ? 'status-completed' : 'status-review')}><i />{codexStatus}</span></article><article><span className="adapter-mark">{fallbackActive ? <CheckCircle /> : <WarningCircle />}</span><div><strong>codex exec --json</strong><p>{text('协议不兼容时自动降级；实时审批能力受限。', 'Automatic protocol fallback with limited live approvals.')}</p></div><span className={clsx('status-text', fallbackActive ? 'status-completed' : 'status-review')}><i />{fallbackStatus}</span></article><article><span className="adapter-mark"><Code /></span><div><strong>Claude compatibility</strong><p>{text('仅配置生成、兼容报告与状态导入。', 'Configuration generation, compatibility reports, and state import only.')}</p></div><span className="status-text status-ready"><i />ALPHA</span></article></section>
       <section className="privacy-register"><h3>{text('本地边界', 'Local boundary')}</h3><p>{text('服务仅绑定 127.0.0.1。不会存储 Codex 或 Claude 模型凭据，也不会自动同步到云端。', 'The service binds only to 127.0.0.1. It stores no Codex or Claude model credentials and performs no automatic cloud sync.')}</p><dl><div><dt>{text('遥测', 'Telemetry')}</dt><dd>{text('关闭', 'Off')}</dd></div><div><dt>{text('会话令牌', 'Session token')}</dt><dd>{text('每次启动随机生成', 'Random per launch')}</dd></div><div><dt>{text('数据库', 'Database')}</dt><dd>SQLite WAL · {text('完整性正常', 'Integrity healthy')}</dd></div></dl></section></div>
   </section>
@@ -859,9 +858,9 @@ function initialTheme(): ThemePreference {
   return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
 }
 
-function initialPalette(): ColorPalette {
-  const stored = window.localStorage.getItem('ba-agent-palette')
-  return stored === 'blueprint' || stored === 'graphite' || stored === 'sand' ? stored : 'fieldbook'
+function initialVisualTheme(): VisualTheme {
+  const stored = window.localStorage.getItem('ba-agent-visual-theme')
+  return stored === 'chartroom' || stored === 'signalroom' ? stored : 'fieldbook'
 }
 
 function initialLanguage(): Language {
@@ -871,7 +870,7 @@ function initialLanguage(): Language {
 export function ConsoleApp() {
   const [language, setLanguage] = useState<Language>(initialLanguage)
   const [theme, setTheme] = useState<ThemePreference>(initialTheme)
-  const [palette, setPalette] = useState<ColorPalette>(initialPalette)
+  const [visualTheme, setVisualTheme] = useState<VisualTheme>(initialVisualTheme)
   const [, startLanguageTransition] = useTransition()
   const updateLanguage = useCallback((nextLanguage: Language) => {
     startLanguageTransition(() => setLanguage(nextLanguage))
@@ -882,23 +881,23 @@ export function ConsoleApp() {
     const apply = () => {
       const resolved = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme
       document.documentElement.dataset.theme = resolved
-      document.documentElement.dataset.palette = palette
+      document.documentElement.dataset.visualTheme = visualTheme
       document.documentElement.style.colorScheme = resolved
-      const themeColors: Record<ColorPalette, { light: string; dark: string }> = {
+      const themeColors: Record<VisualTheme, { light: string; dark: string }> = {
         fieldbook: { light: '#f3f0e6', dark: '#131a17' },
-        blueprint: { light: '#edf3f8', dark: '#0e1921' },
-        graphite: { light: '#eef0f1', dark: '#14191c' },
-        sand: { light: '#f5efe3', dark: '#191612' },
+        chartroom: { light: '#eef1ef', dark: '#0c1c26' },
+        signalroom: { light: '#e9ecef', dark: '#0c1117' },
       }
-      const themeColor = themeColors[palette][resolved]
+      const themeColor = themeColors[visualTheme][resolved]
       document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', themeColor)
     }
     apply()
     media.addEventListener('change', apply)
     window.localStorage.setItem('ba-agent-theme', theme)
-    window.localStorage.setItem('ba-agent-palette', palette)
+    window.localStorage.setItem('ba-agent-visual-theme', visualTheme)
+    window.localStorage.removeItem('ba-agent-palette')
     return () => media.removeEventListener('change', apply)
-  }, [palette, theme])
+  }, [theme, visualTheme])
 
   useEffect(() => {
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en'
@@ -906,8 +905,8 @@ export function ConsoleApp() {
   }, [language])
 
   const settings = useMemo(
-    () => ({ language, setLanguage: updateLanguage, theme, setTheme, palette, setPalette }),
-    [language, palette, theme, updateLanguage],
+    () => ({ language, setLanguage: updateLanguage, theme, setTheme, visualTheme, setVisualTheme }),
+    [language, theme, updateLanguage, visualTheme],
   )
 
   return <UiSettingsContext.Provider value={settings}><QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider></UiSettingsContext.Provider>

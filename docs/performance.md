@@ -129,9 +129,9 @@ The Windows sample retained an isolated 356.629 ms API maximum in the evidence; 
 
 All observations remained below LCP 1.5 seconds, INP 200 ms and CLS 0.1. Functional/accessibility and performance scenarios were intentionally executed in separate Playwright invocations, with one performance worker, so runner contention could not mask a product regression or create a false budget failure.
 
-## 2026-08-26 — Four-palette theme hardening
+## 2026-08-26 — Interface-theme hardening
 
-The console added independently persisted survey-green, blueprint-blue, graphite-gray and warm-sand palettes across light and dark appearance. The expanded local matrix passed 48 functional/accessibility scenarios: 224 seven-route palette/appearance/language/device scans with zero axe violations, plus explicit desktop/mobile forced-color sidebar checks. The isolated production performance confirmation measured desktop LCP/INP/CLS at 332 ms / 24 ms / 0.02253 and Pixel 7 emulation at 288 ms / 16 ms / 0; both remained within budget.
+The console retained the approved Field Book as its unchanged default and introduced two structural alternatives: Chart Room reorganizes the shell as a horizontal drafting table, while Signal Room separates navigation and live surfaces into a modular operations desk. Forty functional/accessibility scenarios cover all three themes across light/dark appearance, both languages, seven routes and desktop/Pixel 7 viewports, including 168 route scans with zero axe violations plus explicit forced-color sidebar checks. The isolated production confirmation measured desktop LCP/INP/CLS at 340 ms / 24 ms / 0.02253 and Pixel 7 emulation at 256 ms / 16 ms / 0; both remained within budget.
 
 ### Downloaded artifact verification
 

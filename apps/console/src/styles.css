@@ -16,6 +16,7 @@
   --success: #2b675b;
   --success-deep: #214e45;
   --success-soft: #dce8e1;
+  --live: #77b6a6;
   --brass: #805217;
   --brass-soft: #ead9b8;
   --red: #a3453f;
@@ -60,21 +61,21 @@
   --red-soft: #4a2a29;
   --sidebar-copy: #edf0e8;
   --sidebar-muted: #a8b4ac;
-  --sidebar-surface: #111815;
-  --sidebar-border: #080d0a;
-  --sidebar-rule: rgb(255 255 255 / 13%);
-  --sidebar-link: #d5ddd7;
-  --sidebar-link-muted: #a8b4ac;
+  --sidebar-surface: #202722;
+  --sidebar-border: #111712;
+  --sidebar-rule: rgb(255 255 255 / 11%);
+  --sidebar-link: #cfd6d0;
+  --sidebar-link-muted: #9daca3;
   --sidebar-link-strong: #fffdf5;
-  --sidebar-active: #e2bd79;
-  --sidebar-hover: rgb(255 255 255 / 6%);
-  --sidebar-selected: rgb(255 255 255 / 10%);
-  --sidebar-project: #d0d9d2;
-  --sidebar-project-muted: #a4b0a8;
+  --sidebar-active: #dec18c;
+  --sidebar-hover: rgb(255 255 255 / 5%);
+  --sidebar-selected: rgb(255 255 255 / 8%);
+  --sidebar-project: #c8d0ca;
+  --sidebar-project-muted: #8e9b93;
   --shadow: 0 12px 32px rgb(0 0 0 / 24%);
 }
 
-:root[data-palette='blueprint'] {
+:root[data-visual-theme='chartroom'] {
   --paper: #edf3f8;
   --paper-raised: #f7fafc;
   --paper-deep: #dbe7f0;
@@ -107,7 +108,7 @@
   --shadow: 0 10px 28px rgb(20 50 70 / 12%);
 }
 
-:root[data-theme='dark'][data-palette='blueprint'] {
+:root[data-theme='dark'][data-visual-theme='chartroom'] {
   --paper: #14232d;
   --paper-raised: #1b2d39;
   --paper-deep: #0e1921;
@@ -140,7 +141,7 @@
   --shadow: 0 12px 32px rgb(0 0 0 / 28%);
 }
 
-:root[data-palette='graphite'] {
+:root[data-visual-theme='signalroom'] {
   --paper: #eef0f1;
   --paper-raised: #f8f9f9;
   --paper-deep: #dde1e3;
@@ -173,7 +174,7 @@
   --shadow: 0 10px 28px rgb(30 42 49 / 11%);
 }
 
-:root[data-theme='dark'][data-palette='graphite'] {
+:root[data-theme='dark'][data-visual-theme='signalroom'] {
   --paper: #1b2125;
   --paper-raised: #242c31;
   --paper-deep: #14191c;
@@ -204,72 +205,6 @@
   --sidebar-project: #d8e1e5;
   --sidebar-project-muted: #afbbc1;
   --shadow: 0 12px 32px rgb(0 0 0 / 27%);
-}
-
-:root[data-palette='sand'] {
-  --paper: #f5efe3;
-  --paper-raised: #fbf8f1;
-  --paper-deep: #e9ddca;
-  --paper-ledger: #f0e5d3;
-  --ink: #302923;
-  --ink-soft: #5b5047;
-  --muted: #665a50;
-  --rule: #b5a796;
-  --rule-soft: rgb(91 70 52 / 16%);
-  --green: #76552f;
-  --green-deep: #573d21;
-  --green-soft: #eadcc7;
-  --brass: #73500e;
-  --brass-soft: #ecd9ad;
-  --red: #9e4640;
-  --red-soft: #f0dcd7;
-  --sidebar-copy: #f2eae1;
-  --sidebar-muted: #c7b6a6;
-  --sidebar-surface: #3b3028;
-  --sidebar-border: #231b16;
-  --sidebar-rule: rgb(246 235 224 / 14%);
-  --sidebar-link: #ece2d9;
-  --sidebar-link-muted: #c8b8aa;
-  --sidebar-link-strong: #fffdf9;
-  --sidebar-active: #e4bc70;
-  --sidebar-hover: rgb(246 235 224 / 6%);
-  --sidebar-selected: rgb(246 235 224 / 10%);
-  --sidebar-project: #e7ddd4;
-  --sidebar-project-muted: #c2b1a3;
-  --shadow: 0 10px 28px rgb(71 51 34 / 12%);
-}
-
-:root[data-theme='dark'][data-palette='sand'] {
-  --paper: #241f1a;
-  --paper-raised: #2e2821;
-  --paper-deep: #191612;
-  --paper-ledger: #332b23;
-  --ink: #f1ece5;
-  --ink-soft: #d4c9bd;
-  --muted: #bdb0a3;
-  --rule: #6c5f52;
-  --rule-soft: rgb(237 225 212 / 14%);
-  --green: #d3ad7f;
-  --green-deep: #ebcba6;
-  --green-soft: #4a3928;
-  --brass: #e3b96a;
-  --brass-soft: #4f3d20;
-  --red: #e0877f;
-  --red-soft: #4b2b27;
-  --sidebar-copy: #f2ece5;
-  --sidebar-muted: #c7b9ac;
-  --sidebar-surface: #17130f;
-  --sidebar-border: #0c0907;
-  --sidebar-rule: rgb(246 235 224 / 14%);
-  --sidebar-link: #ece3da;
-  --sidebar-link-muted: #c7b9ac;
-  --sidebar-link-strong: #fffdf9;
-  --sidebar-active: #e9c47c;
-  --sidebar-hover: rgb(246 235 224 / 6%);
-  --sidebar-selected: rgb(246 235 224 / 10%);
-  --sidebar-project: #e7ded5;
-  --sidebar-project-muted: #c2b3a6;
-  --shadow: 0 12px 32px rgb(0 0 0 / 28%);
 }
 
 * { box-sizing: border-box; }
@@ -442,8 +377,8 @@ a { color: inherit; text-underline-offset: .2em; }
   display: inline-block;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 17%, transparent);
+  background: var(--live);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 17%, transparent);
 }
 
 .workspace { min-width: 0; }
@@ -499,11 +434,13 @@ a { color: inherit; text-underline-offset: .2em; }
 .settings-choice:focus-visible { background: var(--green); color: var(--paper-raised); }
 .settings-separator { height: 1px; margin: 7px 0; background: var(--rule); }
 .settings-label { padding: 6px 8px; color: var(--muted); font: 650 9px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
-.palette-swatch { width: 13px; height: 13px; border: 1px solid currentColor; background: var(--swatch); }
-.palette-swatch-field { --swatch: #2b675b; }
-.palette-swatch-blueprint { --swatch: #24658f; }
-.palette-swatch-graphite { --swatch: #4b6575; }
-.palette-swatch-sand { --swatch: #9a7448; }
+.theme-mark { position: relative; width: 14px; height: 14px; border: 1px solid currentColor; background: transparent; }
+.theme-mark::after { content: ''; position: absolute; inset: 3px; border-top: 1px solid currentColor; border-bottom: 1px solid currentColor; }
+.theme-mark-chartroom { transform: rotate(45deg); }
+.theme-mark-chartroom::after { inset: 2px 4px; border-bottom: 0; }
+.theme-mark-signalroom { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; padding: 2px; }
+.theme-mark-signalroom::before,
+.theme-mark-signalroom::after { position: static; content: ''; border: 0; background: currentColor; }
 
 #main-content { min-width: 0; }
 
@@ -876,12 +813,170 @@ a { color: inherit; text-underline-offset: .2em; }
 .privacy-register dt { color: var(--muted); font-size: 9px; }
 .privacy-register dd { margin: 7px 0 0; font-size: 10px; }
 
+/* Chart room: a horizontal drafting table with a coordinate rail instead of a left-hand book index. */
+:root[data-visual-theme='chartroom'] .app-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 68px minmax(0, 1fr);
+}
+
+:root[data-visual-theme='chartroom'] .sidebar {
+  position: sticky;
+  z-index: 40;
+  top: 0;
+  width: 100%;
+  height: 68px;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr) auto;
+  align-items: stretch;
+  overflow: visible;
+  border-right: 0;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+
+:root[data-visual-theme='chartroom'] .brand-block {
+  min-height: 0;
+  display: grid;
+  align-content: center;
+  padding: 0 22px;
+  border-right: 1px solid var(--sidebar-rule);
+  border-bottom: 0;
+}
+
+:root[data-visual-theme='chartroom'] .brand-block strong { font-size: 18px; letter-spacing: .01em; }
+:root[data-visual-theme='chartroom'] .brand-block span { margin-top: 6px; }
+:root[data-visual-theme='chartroom'] .primary-nav { min-width: 0; display: flex; align-items: stretch; overflow-x: auto; padding: 0 8px; }
+:root[data-visual-theme='chartroom'] .nav-link {
+  min-width: max-content;
+  min-height: 68px;
+  flex: 1 0 auto;
+  grid-template-columns: 18px auto auto;
+  padding: 0 13px;
+  border-left: 0;
+  border-bottom: 2px solid transparent;
+}
+:root[data-visual-theme='chartroom'] .nav-link.is-active { border-bottom-color: var(--sidebar-active); }
+:root[data-visual-theme='chartroom'] .nav-link small { padding: 3px 4px; border: 1px solid currentColor; }
+:root[data-visual-theme='chartroom'] .control-index { display: none; }
+:root[data-visual-theme='chartroom'] .sidebar-foot { min-width: 170px; min-height: 0; margin: 0; padding: 0 18px; border-top: 0; border-left: 1px solid var(--sidebar-rule); }
+:root[data-visual-theme='chartroom'] .sidebar-foot small { display: none; }
+:root[data-visual-theme='chartroom'] .topbar { min-height: 64px; padding-inline: 24px; background: var(--paper-deep); }
+:root[data-visual-theme='chartroom'] .topbar h1 { font-family: var(--mono); font-size: 16px; font-weight: 650; letter-spacing: .02em; }
+:root[data-visual-theme='chartroom'] .overview-page { height: calc(100dvh - 132px); }
+:root[data-visual-theme='chartroom'] .register-page { min-height: calc(100dvh - 132px); }
+:root[data-visual-theme='chartroom'] .traverse-field,
+:root[data-visual-theme='chartroom'] .register-page {
+  background:
+    linear-gradient(color-mix(in srgb, var(--green) 11%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--green) 11%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--green) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--green) 5%, transparent) 1px, transparent 1px),
+    var(--paper);
+  background-position: -1px -1px;
+  background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+}
+:root[data-visual-theme='chartroom'] .traverse-field { min-width: 0; }
+:root[data-visual-theme='chartroom'] .station-pin { border-radius: 2px; transform: rotate(45deg); }
+:root[data-visual-theme='chartroom'] .station-pin::after { border-radius: 0; }
+:root[data-visual-theme='chartroom'] .station-label { border: 1px solid var(--ink); box-shadow: none; }
+:root[data-visual-theme='chartroom'] .action-ledger { border-left: 1px solid var(--ink); }
+:root[data-visual-theme='chartroom'] .field-action,
+:root[data-visual-theme='chartroom'] .icon-button,
+:root[data-visual-theme='chartroom'] .settings-layout select { border-radius: 0; }
+:root[data-visual-theme='chartroom'] .page-header h2 { font-family: var(--mono); font-weight: 650; letter-spacing: -.01em; }
+:root[data-visual-theme='chartroom'] .measure-label { letter-spacing: .14em; }
+
+/* Signal room: a modular operations desk with separated instruments and a dense status rail. */
+:root[data-visual-theme='signalroom'] .app-shell { grid-template-columns: 264px minmax(0, 1fr); background: var(--paper-deep); }
+:root[data-visual-theme='signalroom'] .sidebar { padding: 12px; gap: 8px; border-right: 0; }
+:root[data-visual-theme='signalroom'] .brand-block { flex-basis: 82px; padding: 18px 14px; border: 1px solid var(--sidebar-rule); }
+:root[data-visual-theme='signalroom'] .primary-nav { display: grid; gap: 5px; padding: 8px 0; }
+:root[data-visual-theme='signalroom'] .nav-link {
+  min-height: 46px;
+  padding-inline: 13px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+:root[data-visual-theme='signalroom'] .nav-link:hover { border-color: var(--sidebar-rule); }
+:root[data-visual-theme='signalroom'] .nav-link.is-active { border-color: var(--sidebar-active); background: var(--sidebar-selected); }
+:root[data-visual-theme='signalroom'] .control-index { margin: 14px 14px 0; }
+:root[data-visual-theme='signalroom'] .control-project { min-height: 58px; }
+:root[data-visual-theme='signalroom'] .sidebar-foot { min-height: 62px; margin-top: auto; padding-inline: 14px; border: 1px solid var(--sidebar-rule); border-radius: 6px; }
+:root[data-visual-theme='signalroom'] .workspace { padding: 12px; background: var(--paper-deep); }
+:root[data-visual-theme='signalroom'] .topbar {
+  min-height: 64px;
+  margin-bottom: 12px;
+  padding-inline: 20px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper-raised);
+}
+:root[data-visual-theme='signalroom'] #main-content { display: block; }
+:root[data-visual-theme='signalroom'] .overview-page {
+  height: calc(100dvh - 100px);
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(0, 1fr) 72px;
+  gap: 12px;
+}
+:root[data-visual-theme='signalroom'] .overview-main { gap: 12px; border-right: 0; }
+:root[data-visual-theme='signalroom'] .traverse-field,
+:root[data-visual-theme='signalroom'] .event-register,
+:root[data-visual-theme='signalroom'] .action-ledger,
+:root[data-visual-theme='signalroom'] .receipt-footer {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background-color: var(--paper-raised);
+}
+:root[data-visual-theme='signalroom'] .traverse-field {
+  background:
+    linear-gradient(color-mix(in srgb, var(--green) 7%, transparent) 1px, transparent 1px),
+    var(--paper-raised);
+  background-size: 100% 32px;
+}
+:root[data-visual-theme='signalroom'] .event-register { border-top-width: 1px; }
+:root[data-visual-theme='signalroom'] .receipt-footer { grid-column: 1 / 3; }
+:root[data-visual-theme='signalroom'] .register-page {
+  min-height: calc(100dvh - 100px);
+  padding: 24px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper-raised);
+}
+:root[data-visual-theme='signalroom'] .page-header { min-height: 72px; border-bottom-width: 1px; }
+:root[data-visual-theme='signalroom'] .field-action,
+:root[data-visual-theme='signalroom'] .icon-button,
+:root[data-visual-theme='signalroom'] .settings-layout select,
+:root[data-visual-theme='signalroom'] .operation-fields input:not([type='checkbox']),
+:root[data-visual-theme='signalroom'] .operation-fields select,
+:root[data-visual-theme='signalroom'] .operation-fields textarea { border-radius: 6px; }
+:root[data-visual-theme='signalroom'] .settings-menu { border-radius: 8px; }
+:root[data-visual-theme='signalroom'] .station-label { border: 1px solid var(--rule); border-radius: 6px; box-shadow: var(--shadow); }
+:root[data-visual-theme='signalroom'] .verification-stamp { border-radius: 4px; transform: none; }
+:root[data-visual-theme='signalroom'] .quality-layout,
+:root[data-visual-theme='signalroom'] .settings-layout fieldset,
+:root[data-visual-theme='signalroom'] .adapter-register,
+:root[data-visual-theme='signalroom'] .privacy-register { border-color: var(--rule); border-radius: 6px; overflow: hidden; }
+
 @media (max-width: 1180px) {
   .topbar-datum > span:first-child { display: none; }
   .overview-page { grid-template-columns: minmax(0,1fr) 270px; }
   .action-ledger { padding-inline: 20px; }
   .project-grid { grid-template-columns: 90px minmax(190px,1.2fr) minmax(160px,1fr) 95px 130px 130px; }
   .approval-register-row { grid-template-columns: 60px minmax(0,1fr) 84px 190px; }
+
+  :root[data-visual-theme='chartroom'] .sidebar { grid-template-columns: 160px minmax(0, 1fr) 132px; }
+  :root[data-visual-theme='chartroom'] .brand-block { padding-inline: 16px; }
+  :root[data-visual-theme='chartroom'] .nav-link { grid-template-columns: auto; padding-inline: 9px; }
+  :root[data-visual-theme='chartroom'] .nav-link svg,
+  :root[data-visual-theme='chartroom'] .nav-link small { display: none; }
+  :root[data-visual-theme='chartroom'] .sidebar-foot { min-width: 0; padding-inline: 12px; }
+
+  :root[data-visual-theme='signalroom'] .app-shell { grid-template-columns: 228px minmax(0, 1fr); }
+  :root[data-visual-theme='signalroom'] .overview-page { height: auto; display: block; }
+  :root[data-visual-theme='signalroom'] .overview-main { display: block; }
+  :root[data-visual-theme='signalroom'] .traverse-field { min-width: 0; min-height: 560px; margin-bottom: 12px; }
+  :root[data-visual-theme='signalroom'] .event-register,
+  :root[data-visual-theme='signalroom'] .action-ledger { margin-bottom: 12px; }
+  :root[data-visual-theme='signalroom'] .receipt-footer { min-height: 82px; }
 }
 
 @media (max-width: 900px) {
@@ -973,6 +1068,38 @@ a { color: inherit; text-underline-offset: .2em; }
   .settings-layout label { grid-template-columns: 1fr; }
   .privacy-register dl { grid-template-columns: 1fr; }
   .privacy-register dl > div { border-right: 0; border-bottom: 1px solid var(--rule); }
+}
+
+@media (max-width: 900px) {
+  :root[data-visual-theme='chartroom'] .app-shell { display: block; }
+  :root[data-visual-theme='chartroom'] .sidebar {
+    position: relative;
+    height: auto;
+    display: block;
+  }
+  :root[data-visual-theme='chartroom'] .brand-block { min-height: 62px; display: flex; padding-inline: 18px; border-right: 0; border-bottom: 1px solid var(--sidebar-rule); }
+  :root[data-visual-theme='chartroom'] .primary-nav { padding: 0 10px 10px; }
+  :root[data-visual-theme='chartroom'] .nav-link { min-height: 42px; }
+  :root[data-visual-theme='chartroom'] .sidebar-foot { display: none; }
+  :root[data-visual-theme='chartroom'] .overview-page,
+  :root[data-visual-theme='chartroom'] .register-page { min-height: 0; height: auto; }
+
+  :root[data-visual-theme='signalroom'] .app-shell { display: block; background: var(--paper-deep); }
+  :root[data-visual-theme='signalroom'] .sidebar { position: relative; width: 100%; height: auto; display: block; padding: 8px; }
+  :root[data-visual-theme='signalroom'] .brand-block { min-height: 62px; display: flex; padding: 14px 16px; }
+  :root[data-visual-theme='signalroom'] .primary-nav { display: flex; gap: 5px; overflow-x: auto; padding: 8px 0 0; }
+  :root[data-visual-theme='signalroom'] .nav-link { min-height: 42px; flex: 0 0 auto; grid-template-columns: 18px auto; }
+  :root[data-visual-theme='signalroom'] .control-index,
+  :root[data-visual-theme='signalroom'] .sidebar-foot { display: none; }
+  :root[data-visual-theme='signalroom'] .workspace { padding: 8px; }
+  :root[data-visual-theme='signalroom'] .topbar { margin-bottom: 8px; }
+  :root[data-visual-theme='signalroom'] .overview-page { height: auto; display: block; }
+  :root[data-visual-theme='signalroom'] .overview-main { display: block; }
+  :root[data-visual-theme='signalroom'] .traverse-field,
+  :root[data-visual-theme='signalroom'] .event-register,
+  :root[data-visual-theme='signalroom'] .action-ledger { margin-bottom: 8px; }
+  :root[data-visual-theme='signalroom'] .receipt-footer { min-height: 92px; }
+  :root[data-visual-theme='signalroom'] .register-page { min-height: 0; padding: 20px 16px 32px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

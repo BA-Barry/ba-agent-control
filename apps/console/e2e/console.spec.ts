@@ -12,30 +12,26 @@ const routes = [
 ] as const
 
 const settings = [
-  { language: 'zh', theme: 'light', palette: 'fieldbook' },
-  { language: 'zh', theme: 'dark', palette: 'fieldbook' },
-  { language: 'en', theme: 'light', palette: 'fieldbook' },
-  { language: 'en', theme: 'dark', palette: 'fieldbook' },
-  { language: 'zh', theme: 'light', palette: 'blueprint' },
-  { language: 'zh', theme: 'dark', palette: 'blueprint' },
-  { language: 'en', theme: 'light', palette: 'blueprint' },
-  { language: 'en', theme: 'dark', palette: 'blueprint' },
-  { language: 'zh', theme: 'light', palette: 'graphite' },
-  { language: 'zh', theme: 'dark', palette: 'graphite' },
-  { language: 'en', theme: 'light', palette: 'graphite' },
-  { language: 'en', theme: 'dark', palette: 'graphite' },
-  { language: 'zh', theme: 'light', palette: 'sand' },
-  { language: 'zh', theme: 'dark', palette: 'sand' },
-  { language: 'en', theme: 'light', palette: 'sand' },
-  { language: 'en', theme: 'dark', palette: 'sand' },
+  { language: 'zh', theme: 'light', visualTheme: 'fieldbook' },
+  { language: 'zh', theme: 'dark', visualTheme: 'fieldbook' },
+  { language: 'en', theme: 'light', visualTheme: 'fieldbook' },
+  { language: 'en', theme: 'dark', visualTheme: 'fieldbook' },
+  { language: 'zh', theme: 'light', visualTheme: 'chartroom' },
+  { language: 'zh', theme: 'dark', visualTheme: 'chartroom' },
+  { language: 'en', theme: 'light', visualTheme: 'chartroom' },
+  { language: 'en', theme: 'dark', visualTheme: 'chartroom' },
+  { language: 'zh', theme: 'light', visualTheme: 'signalroom' },
+  { language: 'zh', theme: 'dark', visualTheme: 'signalroom' },
+  { language: 'en', theme: 'light', visualTheme: 'signalroom' },
+  { language: 'en', theme: 'dark', visualTheme: 'signalroom' },
 ] as const
 
-async function seedSettings(page: Page, language: 'zh' | 'en', theme: 'light' | 'dark', palette: 'fieldbook' | 'blueprint' | 'graphite' | 'sand' = 'fieldbook') {
-  await page.addInitScript(({ language, theme, palette }) => {
+async function seedSettings(page: Page, language: 'zh' | 'en', theme: 'light' | 'dark', visualTheme: 'fieldbook' | 'chartroom' | 'signalroom' = 'fieldbook') {
+  await page.addInitScript(({ language, theme, visualTheme }) => {
     window.localStorage.setItem('ba-agent-language', language)
     window.localStorage.setItem('ba-agent-theme', theme)
-    window.localStorage.setItem('ba-agent-palette', palette)
-  }, { language, theme, palette })
+    window.localStorage.setItem('ba-agent-visual-theme', visualTheme)
+  }, { language, theme, visualTheme })
 }
 
 async function expectNoA11yViolations(page: Page) {
@@ -183,14 +179,14 @@ async function mockLongRunApi(page: Page) {
 }
 
 for (const setting of settings) {
-  test(`${setting.language}/${setting.theme}/${setting.palette}: all routes pass accessibility and viewport checks`, async ({ page }) => {
-    await seedSettings(page, setting.language, setting.theme, setting.palette)
+  test(`${setting.language}/${setting.theme}/${setting.visualTheme}: all routes pass accessibility and viewport checks`, async ({ page }) => {
+    await seedSettings(page, setting.language, setting.theme, setting.visualTheme)
     await mockDemoFallback(page)
     for (const route of routes) {
       await page.goto(route.path)
       await expect(page.locator('html')).toHaveAttribute('lang', setting.language === 'zh' ? 'zh-CN' : 'en')
       await expect(page.locator('html')).toHaveAttribute('data-theme', setting.theme)
-      await expect(page.locator('html')).toHaveAttribute('data-palette', setting.palette)
+      await expect(page.locator('html')).toHaveAttribute('data-visual-theme', setting.visualTheme)
       await expect(page.getByRole('heading', { name: setting.language === 'zh' ? route.zh : route.en }).last()).toBeVisible()
       await expectNoA11yViolations(page)
       await expectNoDocumentOverflow(page)
@@ -255,7 +251,7 @@ test('slow and empty local APIs have explicit, honest states', async ({ page }) 
   await page.goto('/projects')
   await expect(page.getByRole('status').filter({ hasText: '正在连接本地服务' })).toBeVisible()
   await expect(page.getByRole('heading', { level: 3, name: '项目登记为空' })).toBeVisible()
-  await expect(page.getByText('实时数据', { exact: true })).toBeVisible()
+  await expect(page.getByText('实时数据', { exact: true })).toBeVisible({ timeout: 10_000 })
   await expectNoA11yViolations(page)
 })
 

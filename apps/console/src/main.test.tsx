@@ -31,13 +31,13 @@ test('switches the console language without losing navigation', async () => {
   expect(within(view.container).getByRole('navigation', { name: 'Primary navigation' })).toBeInTheDocument()
 })
 
-test('switches to the blueprint palette and persists the choice', async () => {
+test('switches to the chart-room interface and persists the choice', async () => {
   const user = userEvent.setup()
   const view = render(<ConsoleApp />)
   await user.click(await within(view.container).findByRole('button', { name: '显示与语言设置' }))
-  await user.click(screen.getByRole('radio', { name: '蓝图蓝' }))
-  await waitFor(() => expect(document.documentElement).toHaveAttribute('data-palette', 'blueprint'))
-  expect(localStorage.getItem('ba-agent-palette')).toBe('blueprint')
+  await user.click(screen.getByRole('radio', { name: '航图台' }))
+  await waitFor(() => expect(document.documentElement).toHaveAttribute('data-visual-theme', 'chartroom'))
+  expect(localStorage.getItem('ba-agent-visual-theme')).toBe('chartroom')
   expect(within(view.container).getByRole('navigation', { name: '主导航' })).toBeInTheDocument()
 })
 
