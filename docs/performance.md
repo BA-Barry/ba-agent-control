@@ -129,6 +129,10 @@ The Windows sample retained an isolated 356.629 ms API maximum in the evidence; 
 
 All observations remained below LCP 1.5 seconds, INP 200 ms and CLS 0.1. Functional/accessibility and performance scenarios were intentionally executed in separate Playwright invocations, with one performance worker, so runner contention could not mask a product regression or create a false budget failure.
 
+## 2026-08-26 — Four-palette theme hardening
+
+The console added independently persisted survey-green, blueprint-blue, graphite-gray and warm-sand palettes across light and dark appearance. The expanded local matrix passed 48 functional/accessibility scenarios: 224 seven-route palette/appearance/language/device scans with zero axe violations, plus explicit desktop/mobile forced-color sidebar checks. The isolated production performance confirmation measured desktop LCP/INP/CLS at 332 ms / 24 ms / 0.02253 and Pixel 7 emulation at 288 ms / 16 ms / 0; both remained within budget.
+
 ### Downloaded artifact verification
 
 | Target | Archive bytes | Inner archive SHA-256 | Files |

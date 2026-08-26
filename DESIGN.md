@@ -142,12 +142,22 @@ BA Agent 采用已经批准并实现的 A+B 方向：A 是“控制点—导线�
 
 ## Colors
 
-浅色主题像长期使用但整洁的外业纸张；深色主题保留同一信息层级，把纸、墨、规则线和状态色成组反转，而不是简单套黑色滤镜。frontmatter 中的颜色是实际 CSS 变量值，状态和表面必须通过语义变量使用。
+浅色主题像长期使用但整洁的外业纸张；深色主题保留同一信息层级，把纸、墨、规则线和状态色成组反转，而不是简单套黑色滤镜。frontmatter 中记录默认“测量绿”配色，实际 CSS 以语义变量提供四套可持久化配色；配色改变纸面、导线、侧栏和交互强调，不改变风险、等待与成功的业务含义。
+
+### Palette variants
+
+- **测量绿 `fieldbook`**：默认方向，氧化绿仪器、暖纸与黄铜刻度；与批准构图完全一致。
+- **蓝图蓝 `blueprint`**：冷白/深蓝纸面与工程蓝导线，适合偏制图和高信息密度的工作环境。
+- **石墨灰 `graphite`**：冷灰纸面与低饱和钢蓝导线，降低长时间使用时的色彩负荷。
+- **暖砂棕 `sand`**：暖纸、深棕侧栏与测量木器色导线，强化外业簿的纸张和黄铜质感。
+
+每套配色都单独定义浅色与深色 surface、ink、rule、route accent、sidebar 和 focus/selection 组合。成功色使用独立的 `--success*` 语义 token；等待仍使用 `--brass*`，风险仍使用 `--red*`，同时保留文字、图标、位置或形状作为非颜色线索。
 
 ### Primary
 
-- **导线绿 `traverse-green`**：主导线、控制点、运行/完成/成功、链连续和选中信息的操作色；悬停底色只混入约 5%，避免铺满页面。
-- **深导线绿 `traverse-green-deep`**：主按钮悬停和成功反馈文字；不得替代正文墨色。
+- **导线强调 `traverse-green` / `--green`**：默认配色为绿；其他配色映射为蓝、钢灰或暖棕。用于主导线、控制点、选择和操作强调；悬停底色只混入约 5%，避免铺满页面。
+- **深导线强调 `traverse-green-deep` / `--green-deep`**：主按钮悬停和强调反馈文字；不得替代正文墨色。
+- **成功 `--success*`**：运行/完成/成功、服务在线和链连续；不随页面配色改变业务含义。
 
 ### Secondary
 
@@ -170,7 +180,7 @@ BA Agent 采用已经批准并实现的 A+B 方向：A 是“控制点—导线�
 - **规则线 `rule` / `rule-soft`**：分别用于主要分隔与表内细分。
 - **暗色组**：`dark-paper*`、`dark-ink`、`dark-muted`、`dark-rule` 与三种 `dark-*` 状态色一一替换浅色角色；侧栏固定为深墨场，不随浅色主题漂白。
 
-**The State-Semantics Rule.** 运行中/完成/成功用绿；排队/启动/审查/等待审批用黄铜；阻塞/失败/失联用红。不要根据页面自行重新解释状态色。
+**The State-Semantics Rule.** 运行中/完成/成功使用独立成功色；排队/启动/审查/等待审批用黄铜；阻塞/失败/失联用红。状态同时带文字、图标、位置或形状，不依赖颜色单独传达。不要根据页面或配色自行重新解释状态。
 
 **The One-Accent-at-a-Time Rule.** 同一局部只允许一个主状态色承担注意力；正文、边界和结构仍以墨色/规则线为主。
 
@@ -283,7 +293,8 @@ BA Agent 采用已经批准并实现的 A+B 方向：A 是“控制点—导线�
 
 ### 主题、语言与交互状态
 
-- 主题支持 system/light/dark 并持久化；system 跟随 `prefers-color-scheme`，同时设置 `color-scheme` 和浏览器 `theme-color`。
+- 明暗模式支持 system/light/dark 并持久化；system 跟随 `prefers-color-scheme`。页面配色支持 fieldbook/blueprint/graphite/sand 并独立持久化；两者组合后同步设置 `data-theme`、`data-palette`、`color-scheme` 和浏览器 `theme-color`。
+- Windows `forced-colors` 下侧栏禁用自身调色并使用 `Canvas`、`CanvasText`、`Highlight` 与 `HighlightText`；当前项的文字、图标、编号和背景必须成组切换，不能把普通 `LinkText` 假设为在所有对比度主题中都可见。
 - 语言支持中文/English 并持久化；中文为默认，所有核心流程在两个语言下保持等价。
 - 主要可操作项使用 button、link、select 等原生/语义控件；装饰 SVG 和图标设置 `aria-hidden`，链图有可读 `aria-label`。
 - skip link 在聚焦时进入视口并指向可聚焦的 `main`；键盘顺序跟随视觉扫描顺序。

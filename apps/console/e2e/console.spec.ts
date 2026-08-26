@@ -12,17 +12,30 @@ const routes = [
 ] as const
 
 const settings = [
-  { language: 'zh', theme: 'light' },
-  { language: 'zh', theme: 'dark' },
-  { language: 'en', theme: 'light' },
-  { language: 'en', theme: 'dark' },
+  { language: 'zh', theme: 'light', palette: 'fieldbook' },
+  { language: 'zh', theme: 'dark', palette: 'fieldbook' },
+  { language: 'en', theme: 'light', palette: 'fieldbook' },
+  { language: 'en', theme: 'dark', palette: 'fieldbook' },
+  { language: 'zh', theme: 'light', palette: 'blueprint' },
+  { language: 'zh', theme: 'dark', palette: 'blueprint' },
+  { language: 'en', theme: 'light', palette: 'blueprint' },
+  { language: 'en', theme: 'dark', palette: 'blueprint' },
+  { language: 'zh', theme: 'light', palette: 'graphite' },
+  { language: 'zh', theme: 'dark', palette: 'graphite' },
+  { language: 'en', theme: 'light', palette: 'graphite' },
+  { language: 'en', theme: 'dark', palette: 'graphite' },
+  { language: 'zh', theme: 'light', palette: 'sand' },
+  { language: 'zh', theme: 'dark', palette: 'sand' },
+  { language: 'en', theme: 'light', palette: 'sand' },
+  { language: 'en', theme: 'dark', palette: 'sand' },
 ] as const
 
-async function seedSettings(page: Page, language: 'zh' | 'en', theme: 'light' | 'dark') {
-  await page.addInitScript(({ language, theme }) => {
+async function seedSettings(page: Page, language: 'zh' | 'en', theme: 'light' | 'dark', palette: 'fieldbook' | 'blueprint' | 'graphite' | 'sand' = 'fieldbook') {
+  await page.addInitScript(({ language, theme, palette }) => {
     window.localStorage.setItem('ba-agent-language', language)
     window.localStorage.setItem('ba-agent-theme', theme)
-  }, { language, theme })
+    window.localStorage.setItem('ba-agent-palette', palette)
+  }, { language, theme, palette })
 }
 
 async function expectNoA11yViolations(page: Page) {
@@ -170,13 +183,14 @@ async function mockLongRunApi(page: Page) {
 }
 
 for (const setting of settings) {
-  test(`${setting.language}/${setting.theme}: all routes pass accessibility and viewport checks`, async ({ page }) => {
-    await seedSettings(page, setting.language, setting.theme)
+  test(`${setting.language}/${setting.theme}/${setting.palette}: all routes pass accessibility and viewport checks`, async ({ page }) => {
+    await seedSettings(page, setting.language, setting.theme, setting.palette)
     await mockDemoFallback(page)
     for (const route of routes) {
       await page.goto(route.path)
       await expect(page.locator('html')).toHaveAttribute('lang', setting.language === 'zh' ? 'zh-CN' : 'en')
       await expect(page.locator('html')).toHaveAttribute('data-theme', setting.theme)
+      await expect(page.locator('html')).toHaveAttribute('data-palette', setting.palette)
       await expect(page.getByRole('heading', { name: setting.language === 'zh' ? route.zh : route.en }).last()).toBeVisible()
       await expectNoA11yViolations(page)
       await expectNoDocumentOverflow(page)
@@ -311,6 +325,19 @@ test('forced colors and 200% text keep the approval surface operable', async ({ 
   await page.goto('/approvals')
   await expect(page.getByRole('heading', { name: '审批中心' }).last()).toBeVisible()
   await expect(page.getByRole('button', { name: '显示与语言设置' })).toBeVisible()
+  const sidebarColors = await page.evaluate(() => {
+    const sidebar = document.querySelector<HTMLElement>('.sidebar')
+    const nav = document.querySelector<HTMLElement>('.nav-link')
+    const navLabel = document.querySelector<HTMLElement>('.nav-link span')
+    if (!sidebar || !nav || !navLabel) throw new Error('Sidebar navigation is missing')
+    return {
+      background: getComputedStyle(sidebar).backgroundColor,
+      link: getComputedStyle(nav).color,
+      label: getComputedStyle(navLabel).color,
+    }
+  })
+  expect(sidebarColors.link).not.toBe(sidebarColors.background)
+  expect(sidebarColors.label).not.toBe(sidebarColors.background)
   await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })

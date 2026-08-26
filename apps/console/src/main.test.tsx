@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 
@@ -29,6 +29,16 @@ test('switches the console language without losing navigation', async () => {
   await user.click(screen.getByRole('radio', { name: 'English' }))
   expect(await within(view.container).findByRole('heading', { name: 'Project traverse and current closure' })).toBeInTheDocument()
   expect(within(view.container).getByRole('navigation', { name: 'Primary navigation' })).toBeInTheDocument()
+})
+
+test('switches to the blueprint palette and persists the choice', async () => {
+  const user = userEvent.setup()
+  const view = render(<ConsoleApp />)
+  await user.click(await within(view.container).findByRole('button', { name: '显示与语言设置' }))
+  await user.click(screen.getByRole('radio', { name: '蓝图蓝' }))
+  await waitFor(() => expect(document.documentElement).toHaveAttribute('data-palette', 'blueprint'))
+  expect(localStorage.getItem('ba-agent-palette')).toBe('blueprint')
+  expect(within(view.container).getByRole('navigation', { name: '主导航' })).toBeInTheDocument()
 })
 
 test('keeps system-generated operating records localized across every route', async () => {

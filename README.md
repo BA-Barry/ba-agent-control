@@ -14,7 +14,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Probe GitHub credentials safely and inspect repository metadata without enabling remote writes.
 - Generate Codex and Claude-compatible project configuration without overwriting user-owned content.
 - Import and safely restore runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.
-- Operate all seven bilingual console surfaces with real local API/SSE data, responsive themes, keyboard navigation, project/task creation, run control, approvals, and receipt verification.
+- Operate all seven bilingual console surfaces with real local API/SSE data, system/light/dark appearance, four field-book palettes, keyboard navigation, project/task creation, run control, approvals, and receipt verification.
 
 The console follows the approved comp-first “测量员外业簿” direction and is embedded into the Rust binary. When the local service is unavailable it enters an explicitly labeled demonstration mode instead of presenting sample data as live state.
 
