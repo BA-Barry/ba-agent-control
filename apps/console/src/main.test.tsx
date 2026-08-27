@@ -35,6 +35,8 @@ test('switches to the chart-room interface and persists the choice', async () =>
   const user = userEvent.setup()
   const view = render(<ConsoleApp />)
   await user.click(await within(view.container).findByRole('button', { name: '显示与语言设置' }))
+  expect(screen.getByRole('radio', { name: /^外业簿/ })).toBeInTheDocument()
+  expect(screen.queryByText('原版')).not.toBeInTheDocument()
   await user.click(screen.getByRole('radio', { name: '航图台' }))
   await waitFor(() => expect(document.documentElement).toHaveAttribute('data-visual-theme', 'chartroom'))
   expect(localStorage.getItem('ba-agent-visual-theme')).toBe('chartroom')
