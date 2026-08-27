@@ -17,9 +17,9 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | M1 Foundation | Proven locally and hosted | Embedded single binary, SQLite migrations/integrity, plugin bundle, and the green Windows/Ubuntu/macOS, console and dependency-audit jobs in [CI run 32866913236](https://github.com/BA-Lau/ba-agent-control/actions/runs/32866913236) | None |
 | M2 Core vertical slice | Proven locally | Transactional state tests, temporary Git/worktree tests, App Server fixture/live contract, gates, local commit, receipts, restart recovery | None for local Alpha |
 | M3 Complete Codex control | Proven locally | Live single-turn and four-parallel-Agent demonstrations, fifth-run capacity rejection, approvals, messages, Hooks, recovery, exec fallback, credential-safe GitHub adapter | None for local Alpha |
-| M4 Personal Alpha console | Proven locally; prior scope proven hosted | 44 functional/accessibility and two isolated performance scenarios cover seven routes, desktop/Pixel 7, Chinese/English, Field Book/Chart Room/Signal Room interfaces, light/dark, real milestone/task mutations, truthful runtime authentication/degradation, keyboard operation, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; the corrected three-theme forced-color/200% regression passes locally; three consecutive real self-hosted workflows survived intervening restarts with 84 ordered events, 18 passed gates and three chained receipts | Hosted confirmation of the expanded scope and manual assistive-technology certification remain Public Beta gates |
+| M4 Personal Alpha console | Proven locally and hosted | 44 functional/accessibility and two isolated performance scenarios cover seven routes, desktop/Pixel 7, Chinese/English, Field Book/Chart Room/Signal Room interfaces, light/dark, real milestone/task mutations, truthful runtime authentication/degradation, keyboard operation, loading, empty, disconnected, extreme text, forced colors, 200% text and Web Vitals; the corrected three-theme forced-color/200% regression passes locally and on all four candidate platforms; three consecutive real self-hosted workflows survived intervening restarts with 84 ordered events, 18 passed gates and three chained receipts | Manual assistive-technology certification remains a Public Beta gate |
 | M5 Claude compatibility and migration | Proven locally | Canonical generator, checksum-managed merges, compatibility report, TheAgency dry-run/apply import, runtime-state evidence repair and hash-chain tests | Claude live dispatch is intentionally outside Alpha |
-| M6 Public Beta | Prior four-platform hosted candidate and license sign-off proven; refreshed candidate and final human gates pending | [Release-candidate run 33011040260](https://github.com/BA-Lau/ba-agent-control/actions/runs/33011040260) at commit `308eb7cd2967cbdc21344c3be995471cc3e84685` passed dependency audits and native Windows x64, Linux x64, macOS Intel and macOS ARM build/test/performance/package/security/lifecycle jobs; downloaded archives were independently checksum- and entry-verified; the release owner signed off the generated technical license inventory on 2026-08-27 CST; the later Signal Room accessibility fix passes the expanded local regression | Hosted confirmation of the fix, a refreshed four-platform candidate, manual assistive-tech checks and explicit publication approval |
+| M6 Public Beta | Accessibility-hardened four-platform candidate and license sign-off proven; final human gates pending | [Release-candidate run 33043702277](https://github.com/BA-Lau/ba-agent-control/actions/runs/33043702277) at commit `309b719d33205518ed29bb1f83894b210eb5bbfb` passed dependency audits and native Windows x64, Linux x64, macOS Intel and macOS ARM build/test/performance/package/security/lifecycle jobs with 44 functional/accessibility scenarios; downloaded archives were independently checksum- and eight-payload-entry verified; the release owner signed off the generated technical license inventory on 2026-08-27 CST | Manual assistive-tech checks and explicit publication approval |
 
 ## Requirement coverage
 
@@ -79,12 +79,12 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | Requirement | Status | Evidence |
 | --- | --- | --- |
 | Deterministic third-party inventory and full notices | Proven locally, hosted and release-owner signed | 273 Rust and 39 runtime frontend packages; 196 deduplicated documents; generation diff gate passed on all four hosted package jobs; release-owner technical sign-off recorded 2026-08-27 CST |
-| Windows archive and lifecycle | Proven hosted | Eight-entry archive SHA-256 `16b98c3111f6ad3d6e04d7e9c7aadd4b98e7eaa2b16cdc55322ec188f29e2751`; hosted install, upgrade, rollback, uninstall and retained SQLite data passed |
+| Windows archive and lifecycle | Proven hosted | Eight-payload-entry archive SHA-256 `5212299662fdff092f14ec61ecce87bc135333cb4b8fc27b46db4689b1ff96bd`; hosted install, upgrade, rollback, uninstall and retained SQLite data passed |
 | Malicious package rejection | Proven hosted | Windows checksum/traversal/reparse-point and Unix checksum/traversal/symlink tests passed natively |
-| Linux/macOS archives and lifecycle | Proven hosted | Linux x64, macOS Intel and macOS ARM native package, checksum, install, upgrade, rollback, uninstall, data-retention and malicious-package tests passed in run 33011040260 |
-| Core startup/API/memory budgets | Proven hosted | Cold start was 11.245–259.462 ms, API p95 0.460–1.903 ms and idle memory 6.89–12.73 MiB across all four clean hosted targets |
-| UI LCP/INP/CLS budgets | Proven hosted | Across all four hosted targets, desktop LCP 204–512 ms / INP 24–96 ms / CLS 0.02253 and mobile LCP 156–536 ms / INP 24–56 ms / CLS 0–0.03777; all budgets passed |
-| No P0/P1 defects | Proven for current local automated gates; refreshed hosted audit pending | The known Signal Room forced-colors contrast finding is fixed and all current automated assertions pass; normal hosted CI, the refreshed candidate and manual assistive-tech checks remain before Public Beta |
+| Linux/macOS archives and lifecycle | Proven hosted | Linux x64, macOS Intel and macOS ARM native package, checksum, install, upgrade, rollback, uninstall, data-retention and malicious-package tests passed in run 33043702277 |
+| Core startup/API/memory budgets | Proven hosted | Cold start was 11.215–146.856 ms, API p95 0.645–2.292 ms and idle memory 6.93–12.56 MiB across all four clean hosted targets |
+| UI LCP/INP/CLS budgets | Proven hosted | Across all four hosted targets, desktop LCP 188–496 ms / INP 32–120 ms / CLS 0.02253 and mobile LCP 144–448 ms / INP 24–80 ms / CLS 0; all budgets passed |
+| No P0/P1 defects | Proven for current automated gates; manual accessibility audit pending | The known Signal Room forced-colors contrast finding is fixed, normal CI is green, and all four refreshed candidate jobs pass; manual assistive-tech checks remain before Public Beta |
 
 ## Alpha acceptance scenario
 
@@ -94,8 +94,7 @@ This deterministic test proves orchestration and persistence without consuming m
 
 ## Remaining blockers and next actions
 
-1. Confirm the accessibility fix in normal hosted CI and refresh the private four-platform candidate.
-2. Complete a manual screen-reader pass plus native Windows High Contrast and actual browser 200% zoom checks.
-3. Only after those gates pass, request separate approval for public repository visibility, a version tag, GitHub Release and public archives.
+1. Complete a manual screen-reader pass plus native Windows High Contrast and actual browser 200% zoom checks.
+2. Only after those gates pass, request separate approval for public repository visibility, a version tag, GitHub Release and public archives.
 
 A private verification remote, authenticated push, CI and hosted candidate workflow were explicitly authorized and completed. Public visibility, tags, GitHub Releases, public archives and deployment remain unauthorized.

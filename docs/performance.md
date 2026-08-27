@@ -162,3 +162,16 @@ After downloading the four workflow artifacts, the adjacent checksum files were 
 Hosted Web Vitals remained within budget on every target: desktop LCP 204–512 ms, INP 24–96 ms and CLS 0.02253; Pixel 7 LCP 156–536 ms, INP 24–56 ms and CLS 0–0.03777. The Windows API sample retained a 362.910 ms maximum while p95 remained 1.903 ms; no outlier was discarded.
 
 The four private artifacts were downloaded after the run. Every adjacent checksum matched a fresh local SHA-256 calculation, and each ZIP/tar archive contained exactly the expected eight payload files. This certifies the immutable commit above, not this later evidence-only documentation commit and not any future publication tag.
+
+## 2026-08-27 CST — Accessibility-hardened four-platform candidate
+
+[Release-candidate run 33043702277](https://github.com/BA-Lau/ba-agent-control/actions/runs/33043702277) certified commit `309b719d33205518ed29bb1f83894b210eb5bbfb` with 44 functional/accessibility scenarios and two isolated Web Vitals scenarios on every native target. The expanded suite includes Field Book, Chart Room and Signal Room under forced colors plus 200% text on desktop and Pixel 7. RustSec, production npm audit, Clippy, all-feature workspace tests, packaging, malicious-package rejection, installation lifecycle and retained runtime data all passed.
+
+| Target | Cold start `< 1 s` | API p95 `< 100 ms` | Idle memory `< 100 MiB` | Archive bytes | Inner archive SHA-256 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Windows x64 | 146.856 ms | 2.017 ms | 12.56 MiB | 6,217,823 | `5212299662fdff092f14ec61ecce87bc135333cb4b8fc27b46db4689b1ff96bd` |
+| Linux x64 | 11.215 ms | 2.292 ms | 12.04 MiB | 6,326,932 | `deecb4b3c5b7f34cecd4ffb3ff52370a70960e81613a25ceede8e930ff5927ab` |
+| macOS Intel | 135.519 ms | 1.073 ms | 6.93 MiB | 5,822,232 | `9d722f8d7579832b1c49048124898ccd63fca7004beb867fe69d3b7492e70c64` |
+| macOS ARM | 53.264 ms | 0.645 ms | 9.33 MiB | 5,493,395 | `4d60da77f7e50f1588f0102d072c8c690bffff621f23cb39e3cacb9cb049adf0` |
+
+Hosted Web Vitals remained within budget: desktop LCP 188–496 ms, INP 32–120 ms and CLS 0.02253; Pixel 7 LCP 144–448 ms, INP 24–80 ms and CLS 0. The downloaded sidecar digests matched independent local SHA-256 calculations and every archive contained exactly eight non-directory payload entries.
