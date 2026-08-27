@@ -45,9 +45,12 @@ cargo build --release --locked -p ba-agent-control
 
 The packager refuses to overwrite an existing archive. Each archive contains the binary, BA Agent license and notice, the third-party inventory, deduplicated full third-party license/notice texts, README, and installation guide. The adjacent `.sha256` file uses the conventional `<digest>  <filename>` format and is mandatory for the bundled installer.
 
+## Release-owner license sign-off
+
+On 2026-08-27 CST, the release owner explicitly accepted the generated third-party license inventory for the private Alpha candidate after reviewing the technical summary: 273 Rust runtime packages, 39 embedded-console runtime packages, no detected GPL/AGPL/LGPL expression, one MPL-2.0 package (`option-ext`), one CDLA-Permissive-2.0 package (`webpki-roots`), and the provenance-locked MIT text override for `react-remove-scroll-bar`. The 196 deduplicated license/notice documents remain bundled and mapped back to packages. This is a project release-owner technical sign-off, not an external legal opinion.
+
 ## Public Beta blockers
 
-- Complete the release-owner legal review of every third-party license expression. Full installed license and notice texts are already generated, deduplicated by SHA-256, mapped back to packages, and bundled; the one npm package that omits its declared MIT text has a provenance-locked upstream override.
 - Resolve the Signal Room active-navigation contrast finding exposed by the expanded Windows forced-colors plus 200% text check, then run that combined regression across all three interface themes.
 - Complete manual screen-reader, native Windows High Contrast and actual browser 200% zoom checks.
 - Obtain explicit user approval before changing the private repository to public or publishing tags, GitHub Releases or public archives.

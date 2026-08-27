@@ -2,7 +2,7 @@
 
 BA Agent (`ba-agent-control`) is a local-first control plane for coordinating auditable AI-assisted development across multiple Git projects. It reuses your authenticated Codex CLI, isolates write tasks in worktrees, pauses risky operations for approval, and stores permanent hash-chained quality receipts.
 
-> Status: the personal Alpha feature set, three-workflow self-hosting acceptance, hosted CI, and the private four-platform release-candidate certification are complete. Manual accessibility and release-owner legal review remain before Public Beta; no tag, GitHub Release, or public archive has been published.
+> Status: the personal Alpha feature set, three-workflow self-hosting acceptance, hosted CI, private four-platform release-candidate certification, and release-owner technical license sign-off are complete. Manual accessibility remains before Public Beta; no tag, GitHub Release, or public archive has been published.
 
 ## What works in this Alpha
 
