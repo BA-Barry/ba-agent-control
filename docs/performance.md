@@ -133,6 +133,10 @@ All observations remained below LCP 1.5 seconds, INP 200 ms and CLS 0.1. Functio
 
 The console retained the approved Field Book as its unchanged default and introduced two structural alternatives: Chart Room reorganizes the shell as a horizontal drafting table, while Signal Room separates navigation and live surfaces into a modular operations desk. Forty functional/accessibility scenarios cover all three themes across light/dark appearance, both languages, seven routes and desktop/Pixel 7 viewports, including 168 route scans with zero axe violations plus explicit forced-color sidebar checks. The isolated production confirmation measured desktop LCP/INP/CLS at 340 ms / 24 ms / 0.02253 and Pixel 7 emulation at 256 ms / 16 ms / 0; both remained within budget.
 
+## 2026-08-27 CST — Forced-color navigation correction
+
+The Signal Room active-navigation contrast defect under forced colors plus 200% text was reproduced as a theme-specific selector overriding the system highlight background. The forced-color state now controls the active link, label, icon, count and border together. The non-performance suite contains 44 functional/accessibility scenarios, including six combined checks across Field Book, Chart Room and Signal Room on desktop and Pixel 7. Every product assertion passed locally; one parallel full-suite request hit the Windows host's transient `ERR_NO_BUFFER_SPACE` before navigation and its isolated single-worker retry passed. The two production performance scenarios then passed independently at desktop 476 ms LCP / 24 ms INP / 0 CLS and Pixel 7 404 ms LCP / 16 ms INP / 0 CLS.
+
 ### Downloaded artifact verification
 
 | Target | Archive bytes | Inner archive SHA-256 | Files |

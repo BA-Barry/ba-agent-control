@@ -1129,19 +1129,19 @@ a { color: inherit; text-underline-offset: .2em; }
   .nav-link svg,
   .nav-link small { color: CanvasText; }
 
-  .nav-link:hover,
-  .nav-link.is-active {
+  :root .sidebar .nav-link:hover,
+  :root .sidebar .nav-link.is-active {
     color: HighlightText;
     background: Highlight;
     border-color: Highlight;
   }
 
-  .nav-link:hover small,
-  .nav-link:hover span,
-  .nav-link:hover svg,
-  .nav-link.is-active small,
-  .nav-link.is-active span,
-  .nav-link.is-active svg { color: HighlightText; }
+  :root .sidebar .nav-link:hover small,
+  :root .sidebar .nav-link:hover span,
+  :root .sidebar .nav-link:hover svg,
+  :root .sidebar .nav-link.is-active small,
+  :root .sidebar .nav-link.is-active span,
+  :root .sidebar .nav-link.is-active svg { color: HighlightText; }
 
   .control-project,
   .control-project:hover,

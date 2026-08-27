@@ -311,32 +311,49 @@ test('very long live content stays contained and reports a disconnected event st
   await expectNoA11yViolations(page)
 })
 
-test('forced colors and 200% text keep the approval surface operable', async ({ page }) => {
-  await seedSettings(page, 'zh', 'light')
-  await mockDemoFallback(page)
-  await page.emulateMedia({ forcedColors: 'active' })
-  await page.addInitScript(() => {
-    document.documentElement.style.fontSize = '200%'
+for (const visualTheme of ['fieldbook', 'chartroom', 'signalroom'] as const) {
+  test(`${visualTheme}: forced colors and 200% text keep the approval surface operable`, async ({ page }) => {
+    await seedSettings(page, 'zh', 'light', visualTheme)
+    await mockDemoFallback(page)
+    await page.emulateMedia({ forcedColors: 'active' })
+    await page.addInitScript(() => {
+      document.documentElement.style.fontSize = '200%'
+    })
+    await page.goto('/approvals')
+    await expect(page.getByRole('heading', { name: '审批中心' }).last()).toBeVisible()
+    await expect(page.getByRole('button', { name: '显示与语言设置' })).toBeVisible()
+    const sidebarColors = await page.evaluate(() => {
+      const sidebar = document.querySelector<HTMLElement>('.sidebar')
+      const inactiveNav = document.querySelector<HTMLElement>('.nav-link:not(.is-active)')
+      const inactiveLabel = inactiveNav?.querySelector<HTMLElement>('span')
+      const activeNav = document.querySelector<HTMLElement>('.nav-link.is-active')
+      const activeLabel = activeNav?.querySelector<HTMLElement>('span')
+      const activeCount = activeNav?.querySelector<HTMLElement>('small')
+      const activeIcon = activeNav?.querySelector<SVGElement>('svg')
+      if (!sidebar || !inactiveNav || !inactiveLabel || !activeNav || !activeLabel || !activeCount || !activeIcon) {
+        throw new Error('Sidebar navigation is missing')
+      }
+      return {
+        sidebarBackground: getComputedStyle(sidebar).backgroundColor,
+        inactiveLink: getComputedStyle(inactiveNav).color,
+        inactiveLabel: getComputedStyle(inactiveLabel).color,
+        activeBackground: getComputedStyle(activeNav).backgroundColor,
+        activeLink: getComputedStyle(activeNav).color,
+        activeLabel: getComputedStyle(activeLabel).color,
+        activeCount: getComputedStyle(activeCount).color,
+        activeIcon: getComputedStyle(activeIcon).color,
+      }
+    })
+    expect(sidebarColors.inactiveLink).not.toBe(sidebarColors.sidebarBackground)
+    expect(sidebarColors.inactiveLabel).not.toBe(sidebarColors.sidebarBackground)
+    expect(sidebarColors.activeBackground).not.toBe(sidebarColors.sidebarBackground)
+    expect(sidebarColors.activeLink).toBe(sidebarColors.activeLabel)
+    expect(sidebarColors.activeLink).toBe(sidebarColors.activeCount)
+    expect(sidebarColors.activeLink).toBe(sidebarColors.activeIcon)
+    await expectNoDocumentOverflow(page)
+    await expectNoA11yViolations(page)
   })
-  await page.goto('/approvals')
-  await expect(page.getByRole('heading', { name: '审批中心' }).last()).toBeVisible()
-  await expect(page.getByRole('button', { name: '显示与语言设置' })).toBeVisible()
-  const sidebarColors = await page.evaluate(() => {
-    const sidebar = document.querySelector<HTMLElement>('.sidebar')
-    const nav = document.querySelector<HTMLElement>('.nav-link')
-    const navLabel = document.querySelector<HTMLElement>('.nav-link span')
-    if (!sidebar || !nav || !navLabel) throw new Error('Sidebar navigation is missing')
-    return {
-      background: getComputedStyle(sidebar).backgroundColor,
-      link: getComputedStyle(nav).color,
-      label: getComputedStyle(navLabel).color,
-    }
-  })
-  expect(sidebarColors.link).not.toBe(sidebarColors.background)
-  expect(sidebarColors.label).not.toBe(sidebarColors.background)
-  await expectNoDocumentOverflow(page)
-  await expectNoA11yViolations(page)
-})
+}
 
 test('production console stays within LCP, INP, and CLS budgets', { tag: '@performance' }, async ({ page }) => {
   const cpuRate = Number.parseFloat(process.env.BA_E2E_CPU_RATE ?? '1')
