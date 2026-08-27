@@ -143,3 +143,18 @@ The console retained the approved Field Book as its unchanged default and introd
 | macOS ARM | 5,489,324 | `3b1516ee40a0ac0cd2b82467b5ce1e7d4f4a2317b1d038b29da9493877b9ec02` | 8 |
 
 After downloading the four workflow artifacts, the adjacent checksum files were parsed and every inner archive was rehashed locally. All four matched. ZIP/tar entry inspection found exactly the expected binary, installer, installation guide, README, BA Agent license and notice, third-party inventory and deduplicated notice bundle on every platform.
+
+## 2026-08-26 UTC / 2026-08-27 CST — Refreshed interface-theme candidate
+
+[Release-candidate run 33011040260](https://github.com/BA-Lau/ba-agent-control/actions/runs/33011040260) certified commit `308eb7cd2967cbdc21344c3be995471cc3e84685` after the interface-theme hardening. RustSec and the production npm audit passed before all four native jobs completed 40 functional/accessibility scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release builds, performance budgets, packaging, malicious-package rejection and install/upgrade/rollback/uninstall with retained SQLite data.
+
+| Target | Cold start `< 1 s` | API p95 `< 100 ms` | Idle memory `< 100 MiB` | Archive bytes | Inner archive SHA-256 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Windows x64 | 259.462 ms | 1.903 ms | 12.73 MiB | 6,217,836 | `16b98c3111f6ad3d6e04d7e9c7aadd4b98e7eaa2b16cdc55322ec188f29e2751` |
+| Linux x64 | 11.245 ms | 0.460 ms | 11.96 MiB | 6,327,135 | `b9be5312f84540d205482c0152cf26b178d1216f888253fab8da1173aa890b20` |
+| macOS Intel | 69.746 ms | 0.863 ms | 6.89 MiB | 5,821,905 | `e616b860fde7ba8c421f7d6bc2b8ab1a87c65a717ec081970bbee853bf539f01` |
+| macOS ARM | 119.783 ms | 0.498 ms | 9.39 MiB | 5,493,253 | `3f4c6d12186c8651af3df961c189e47b8a3327204a3becad07ebebe455194063` |
+
+Hosted Web Vitals remained within budget on every target: desktop LCP 204–512 ms, INP 24–96 ms and CLS 0.02253; Pixel 7 LCP 156–536 ms, INP 24–56 ms and CLS 0–0.03777. The Windows API sample retained a 362.910 ms maximum while p95 remained 1.903 ms; no outlier was discarded.
+
+The four private artifacts were downloaded after the run. Every adjacent checksum matched a fresh local SHA-256 calculation, and each ZIP/tar archive contained exactly the expected eight payload files. This certifies the immutable commit above, not this later evidence-only documentation commit and not any future publication tag.

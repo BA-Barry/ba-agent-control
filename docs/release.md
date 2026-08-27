@@ -19,14 +19,14 @@ The workflow also gates the matrix on RustSec and production npm high-severity a
 
 ## Certified private candidate
 
-[Run 32866937107](https://github.com/BA-Lau/ba-agent-control/actions/runs/32866937107) completed successfully for commit `542abe5241c4d35418700b3c5272b93aef685f7a`. Each platform passed 24 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection, install, upgrade, rollback, uninstall and SQLite data retention.
+[Run 33011040260](https://github.com/BA-Lau/ba-agent-control/actions/runs/33011040260) completed successfully for commit `308eb7cd2967cbdc21344c3be995471cc3e84685`. Each platform passed 40 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection, install, upgrade, rollback, uninstall and SQLite data retention.
 
 | Target | Inner release archive SHA-256 | Core cold start | API p95 | Idle memory |
 | --- | --- | ---: | ---: | ---: |
-| `windows-x64` | `6c7e6b1632259d3fecf93de7d8c04db2d7012ce1170da9034ed45453237fdb51` | 161.310 ms | 1.965 ms | 12.65 MiB |
-| `linux-x64` | `2ad62efa177f4bf627d9f78f15b4ef47bc70218ffdd38f1767b88ae3953f9172` | 81.904 ms | 0.410 ms | 12.16 MiB |
-| `macos-x64` | `c81d07b88837d779a7153fefab53a74ba0b0408e388fb163f782db033086fa74` | 106.743 ms | 1.395 ms | 6.91 MiB |
-| `macos-arm64` | `3b1516ee40a0ac0cd2b82467b5ce1e7d4f4a2317b1d038b29da9493877b9ec02` | 76.620 ms | 0.501 ms | 9.44 MiB |
+| `windows-x64` | `16b98c3111f6ad3d6e04d7e9c7aadd4b98e7eaa2b16cdc55322ec188f29e2751` | 259.462 ms | 1.903 ms | 12.73 MiB |
+| `linux-x64` | `b9be5312f84540d205482c0152cf26b178d1216f888253fab8da1173aa890b20` | 11.245 ms | 0.460 ms | 11.96 MiB |
+| `macos-x64` | `e616b860fde7ba8c421f7d6bc2b8ab1a87c65a717ec081970bbee853bf539f01` | 69.746 ms | 0.863 ms | 6.89 MiB |
+| `macos-arm64` | `3f4c6d12186c8651af3df961c189e47b8a3327204a3becad07ebebe455194063` | 119.783 ms | 0.498 ms | 9.39 MiB |
 
 The four downloaded inner archives and adjacent checksum files were independently rechecked after download. Every digest matched and every archive contained exactly the expected eight payload files. These are private workflow artifacts, not a tag, GitHub Release or public distribution. Because this evidence record was committed after the run, a future publication candidate must rerun the workflow on the exact tag commit; these hashes certify only the immutable commit named above.
 
@@ -48,5 +48,6 @@ The packager refuses to overwrite an existing archive. Each archive contains the
 ## Public Beta blockers
 
 - Complete the release-owner legal review of every third-party license expression. Full installed license and notice texts are already generated, deduplicated by SHA-256, mapped back to packages, and bundled; the one npm package that omits its declared MIT text has a provenance-locked upstream override.
+- Resolve the Signal Room active-navigation contrast finding exposed by the expanded Windows forced-colors plus 200% text check, then run that combined regression across all three interface themes.
 - Complete manual screen-reader, native Windows High Contrast and actual browser 200% zoom checks.
 - Obtain explicit user approval before changing the private repository to public or publishing tags, GitHub Releases or public archives.
