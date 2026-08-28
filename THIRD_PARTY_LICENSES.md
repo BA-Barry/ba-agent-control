@@ -37,7 +37,7 @@ This inventory records package license expressions and upstream references. Befo
 | cc | 1.4.4 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/cc-rs) |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/cfg-if) |
 | cfg_aliases | 0.2.2 | MIT | [source](https://github.com/katharostech/cfg_aliases) |
-| chacha20 | 0.10.1 | MIT OR Apache-2.0 | [source](https://github.com/RustCrypto/stream-ciphers) |
+| chacha20 | 0.10.2 | MIT OR Apache-2.0 | [source](https://github.com/RustCrypto/stream-ciphers) |
 | chrono | 0.4.45 | MIT OR Apache-2.0 | [source](https://github.com/chronotope/chrono) |
 | cipher | 0.4.4 | MIT OR Apache-2.0 | [source](https://github.com/RustCrypto/traits) |
 | clap | 4.6.6 | MIT OR Apache-2.0 | [source](https://github.com/clap-rs/clap) |

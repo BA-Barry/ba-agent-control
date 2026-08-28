@@ -195,7 +195,7 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 SHA-256: 1038b7737a0a04bd9268bbb8d17ee4e13c9bb3cf36f39da46c3a1818c798aa20
 Packages:
-- Rust:chacha20@0.10.1 (LICENSE-MIT)
+- Rust:chacha20@0.10.2 (LICENSE-MIT)
 - Rust:zeroize_derive@1.5.0 (LICENSE-MIT)
 --------------------------------------------------------------------------------
 Copyright (c) 2019-2026 The RustCrypto Project Developers
@@ -10027,7 +10027,7 @@ Packages:
 - Rust:block-buffer@0.10.4 (LICENSE-APACHE)
 - Rust:block-padding@0.3.3 (LICENSE-APACHE)
 - Rust:cbc@0.1.2 (LICENSE-APACHE)
-- Rust:chacha20@0.10.1 (LICENSE-APACHE)
+- Rust:chacha20@0.10.2 (LICENSE-APACHE)
 - Rust:cipher@0.4.4 (LICENSE-APACHE)
 - Rust:cpufeatures@0.2.17 (LICENSE-APACHE)
 - Rust:cpufeatures@0.3.0 (LICENSE-APACHE)
