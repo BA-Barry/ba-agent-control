@@ -68,9 +68,9 @@ Status: **complete locally (2026-08-24)**.
 
 Windows x64, Linux x64, macOS x64/arm64 archives; checksums; install/upgrade/rollback; third-party license inventory; reproducible docs; WCAG 2.2 AA and release quality gates. Remote publication remains separately approved.
 
-Status: **private four-platform candidate refreshed (2026-08-27 CST); final human and publication gates remain**. The verification repository is private and no tag, GitHub Release or public archive has been published.
+Status: **private four-platform candidate refreshed (2026-08-28 CST); final human and publication gates remain**. The verification repository is private and no tag, GitHub Release or public archive has been published.
 
-- The manual-only candidate workflow certified Windows x64, Linux x64, macOS Intel and macOS ARM at accessibility-hardened commit `309b719d33205518ed29bb1f83894b210eb5bbfb` in [run 33043702277](https://github.com/BA-Lau/ba-agent-control/actions/runs/33043702277), uploading private Actions artifacts without publishing a Release.
+- The manual-only candidate workflow certified Windows x64, Linux x64, macOS Intel and macOS ARM at current product commit `74a01754d768bd6789a0315b0ebbaa6b568d18b8` in [run 33161059914](https://github.com/BA-Lau/ba-agent-control/actions/runs/33161059914), uploading private Actions artifacts without publishing a Release.
 - The candidate workflow now measures and enforces core startup, local API p95 and idle-memory budgets on every native runner before packaging.
 - Platform packaging emits a portable archive plus mandatory SHA-256 sidecar; install scripts verify the digest before reading package entries and exercise install, upgrade, rollback, uninstall, and explicit runtime-data retention.
 - A deterministic generator inventories the four release targets' union of 273 non-workspace Rust packages and 39 embedded-console runtime packages, embeds 196 deduplicated full license/notice documents with package mappings, and fails closed when installed notice text is missing. The sole upstream npm omission has a provenance-locked override; the release owner completed the technical license sign-off on 2026-08-27 CST.

@@ -19,14 +19,14 @@ The workflow also gates the matrix on RustSec and production npm high-severity a
 
 ## Certified private candidate
 
-[Run 33043702277](https://github.com/BA-Lau/ba-agent-control/actions/runs/33043702277) completed successfully for commit `309b719d33205518ed29bb1f83894b210eb5bbfb`. Each platform passed 44 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection, install, upgrade, rollback, uninstall and SQLite data retention. This candidate includes the three-theme forced-colors plus 200% text regression and the Signal Room active-navigation correction.
+[Run 33161059914](https://github.com/BA-Lau/ba-agent-control/actions/runs/33161059914) completed successfully for commit `74a01754d768bd6789a0315b0ebbaa6b568d18b8`. Each platform passed 44 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection, install, upgrade, rollback, uninstall and SQLite data retention. This candidate includes the three-theme forced-colors plus 200% text regression, the Signal Room active-navigation correction, the user-approved simplified Field Book label, and the non-yanked `chacha20` lockfile refresh. Interface colors and structures are unchanged.
 
 | Target | Inner release archive SHA-256 | Core cold start | API p95 | Idle memory |
 | --- | --- | ---: | ---: | ---: |
-| `windows-x64` | `5212299662fdff092f14ec61ecce87bc135333cb4b8fc27b46db4689b1ff96bd` | 146.856 ms | 2.017 ms | 12.56 MiB |
-| `linux-x64` | `deecb4b3c5b7f34cecd4ffb3ff52370a70960e81613a25ceede8e930ff5927ab` | 11.215 ms | 2.292 ms | 12.04 MiB |
-| `macos-x64` | `9d722f8d7579832b1c49048124898ccd63fca7004beb867fe69d3b7492e70c64` | 135.519 ms | 1.073 ms | 6.93 MiB |
-| `macos-arm64` | `4d60da77f7e50f1588f0102d072c8c690bffff621f23cb39e3cacb9cb049adf0` | 53.264 ms | 0.645 ms | 9.33 MiB |
+| `windows-x64` | `463c43503da23a2e23ece89034bd36b4f5e155c3bc34d46a81423d5f7bbbbc1d` | 221.087 ms | 2.078 ms | 12.72 MiB |
+| `linux-x64` | `57f31dde94b8352a088de81c26a95615331b8264cc876eb6d3809a8276b359cb` | 12.153 ms | 0.544 ms | 11.96 MiB |
+| `macos-x64` | `237243301c27544db25f8bcbd695af557279cd73f80cd5e706c3b820bb406664` | 102.110 ms | 0.921 ms | 6.88 MiB |
+| `macos-arm64` | `0c953886ecfda353583f95e9b0a18a99cfc36ba135b7439ce6a841ee1905639c` | 62.783 ms | 1.522 ms | 9.28 MiB |
 
 The four downloaded inner archives and adjacent checksum files were independently rechecked after download. Every digest matched and every archive contained exactly the expected eight payload files. These are private workflow artifacts, not a tag, GitHub Release or public distribution. Because this evidence record was committed after the run, a future publication candidate must rerun the workflow on the exact tag commit; these hashes certify only the immutable commit named above.
 
@@ -51,7 +51,7 @@ On 2026-08-27 CST, the release owner explicitly accepted the generated third-par
 
 ## Accessibility hardening
 
-On 2026-08-27 CST, the Signal Room active-navigation contrast defect under Windows forced colors plus 200% text was reproduced and fixed without changing any interface theme. Theme-specific navigation rules had overridden the system `Highlight` background while retaining `HighlightText`; the forced-color selector now controls the link, label, icon, count and complete border as one state. The combined regression now runs across Field Book, Chart Room and Signal Room on desktop and Pixel 7, contributing six checks to 44 functional/accessibility scenarios. All six combined checks and both isolated Web Vitals scenarios pass locally and in the four hosted jobs of run 33043702277.
+On 2026-08-27 CST, the Signal Room active-navigation contrast defect under Windows forced colors plus 200% text was reproduced and fixed without changing any interface theme. Theme-specific navigation rules had overridden the system `Highlight` background while retaining `HighlightText`; the forced-color selector now controls the link, label, icon, count and complete border as one state. The combined regression now runs across Field Book, Chart Room and Signal Room on desktop and Pixel 7, contributing six checks to 44 functional/accessibility scenarios. All six combined checks and both isolated Web Vitals scenarios pass locally and in the four hosted jobs of run 33161059914.
 
 ## Public Beta blockers
 

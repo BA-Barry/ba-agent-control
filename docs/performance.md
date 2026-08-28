@@ -175,3 +175,16 @@ The four private artifacts were downloaded after the run. Every adjacent checksu
 | macOS ARM | 53.264 ms | 0.645 ms | 9.33 MiB | 5,493,395 | `4d60da77f7e50f1588f0102d072c8c690bffff621f23cb39e3cacb9cb049adf0` |
 
 Hosted Web Vitals remained within budget: desktop LCP 188–496 ms, INP 32–120 ms and CLS 0.02253; Pixel 7 LCP 144–448 ms, INP 24–80 ms and CLS 0. The downloaded sidecar digests matched independent local SHA-256 calculations and every archive contained exactly eight non-directory payload entries.
+
+## 2026-08-28 CST — Current private four-platform candidate
+
+[Release-candidate run 33161059914](https://github.com/BA-Lau/ba-agent-control/actions/runs/33161059914) certified product commit `74a01754d768bd6789a0315b0ebbaa6b568d18b8` after the approved Field Book label simplification and the non-yanked `chacha20` lockfile refresh. RustSec and production npm audits passed before every native target completed 44 functional/accessibility scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection and the complete install lifecycle with retained SQLite data. No interface colors or structures changed.
+
+| Target | Cold start `< 1 s` | API p95 `< 100 ms` | Idle memory `< 100 MiB` | Archive bytes | Inner archive SHA-256 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Windows x64 | 221.087 ms | 2.078 ms | 12.72 MiB | 6,217,648 | `463c43503da23a2e23ece89034bd36b4f5e155c3bc34d46a81423d5f7bbbbc1d` |
+| Linux x64 | 12.153 ms | 0.544 ms | 11.96 MiB | 6,326,939 | `57f31dde94b8352a088de81c26a95615331b8264cc876eb6d3809a8276b359cb` |
+| macOS Intel | 102.110 ms | 0.921 ms | 6.88 MiB | 5,821,859 | `237243301c27544db25f8bcbd695af557279cd73f80cd5e706c3b820bb406664` |
+| macOS ARM | 62.783 ms | 1.522 ms | 9.28 MiB | 5,493,257 | `0c953886ecfda353583f95e9b0a18a99cfc36ba135b7439ce6a841ee1905639c` |
+
+Hosted Web Vitals remained within budget on every target: desktop LCP 212–540 ms, INP 32–136 ms and CLS 0.02253; Pixel 7 LCP 200–468 ms, INP 24–104 ms and CLS 0. Every downloaded sidecar digest matched an independent local SHA-256 calculation, and every ZIP/tar archive contained exactly the expected eight non-directory payload entries. These private artifacts certify the immutable product commit above; this later evidence-only documentation update does not create a tag, GitHub Release or public distribution.
