@@ -33,7 +33,7 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | Task and Run state machines | Proven locally | Transactional allowed/denied transition tests |
 | Append-only ordered run events | Proven locally | Strict sequence tests; latest event sequence is exposed by the Run API and console |
 | Permanent canonical JSON/SHA-256 receipt chain | Proven locally | Tamper, normalization, contiguous sequence and retention tests |
-| Loopback-only HTTP, random session, Origin/CSRF/CSP/path checks | Proven locally | Server security-header/session/mutation tests and path safety tests |
+| Loopback-only HTTP, random session, Origin/CSRF/CSP/path checks | Proven locally | Server security-header/session/mutation tests and path safety tests; invalid launch tokens return a no-store bilingual recovery page, while descriptor reuse requires an authenticated BA Agent health response and rejects unrelated local listeners |
 | No model credential storage, no telemetry/cloud sync by default | Proven locally by architecture | Runtime and GitHub adapters consume existing CLI/session or process-scoped credentials; no persistence path exists |
 
 ### Runtime, scheduling and Git

@@ -32,6 +32,7 @@ cargo run -p ba-agent-control -- ui
 
 The UI server binds to `127.0.0.1` only and prints a one-time session URL. Runtime data is stored in the operating system's application-data directory; repository-owned configuration is under `.ba-agent/`.
 Running `ui` again while the default local service is alive safely reuses and reopens that authenticated service instead of starting a duplicate process.
+`doctor --json` reports `controlService.status` as `running`, `stopped`, or `stale`. An invalid one-time launch link shows a local recovery page with the exact command to reopen the console; it never guesses or persists the rejected credential.
 
 ## 中文简介
 

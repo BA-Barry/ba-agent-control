@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context as _;
 use axum::{
     Json, Router,
     body::Body,
@@ -91,6 +92,13 @@ pub struct ControlDescriptor {
     pub csrf_token: String,
     pub process_id: u32,
     pub started_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum ControlDescriptorInspection {
+    Missing,
+    Stale,
+    Live(ControlDescriptor),
 }
 
 impl std::fmt::Debug for ControlDescriptor {
@@ -240,11 +248,29 @@ async fn claim_control_descriptor(
 /// recorded by a stale descriptor. The authenticated health response prevents opening a session
 /// token against that unrelated local process.
 pub async fn live_control_descriptor(path: &FsPath) -> Option<ControlDescriptor> {
-    let source = fs::read_to_string(path).ok()?;
-    let descriptor = serde_json::from_str::<ControlDescriptor>(&source).ok()?;
-    control_descriptor_is_live(&descriptor)
-        .await
-        .then_some(descriptor)
+    match inspect_control_descriptor(path).await {
+        ControlDescriptorInspection::Live(descriptor) => Some(descriptor),
+        ControlDescriptorInspection::Missing | ControlDescriptorInspection::Stale => None,
+    }
+}
+
+/// Classify the local control descriptor without exposing its session credential.
+pub async fn inspect_control_descriptor(path: &FsPath) -> ControlDescriptorInspection {
+    let source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ControlDescriptorInspection::Missing;
+        }
+        Err(_) => return ControlDescriptorInspection::Stale,
+    };
+    let Ok(descriptor) = serde_json::from_str::<ControlDescriptor>(&source) else {
+        return ControlDescriptorInspection::Stale;
+    };
+    if control_descriptor_is_live(&descriptor).await {
+        ControlDescriptorInspection::Live(descriptor)
+    } else {
+        ControlDescriptorInspection::Stale
+    }
 }
 
 async fn control_descriptor_is_live(descriptor: &ControlDescriptor) -> bool {
@@ -311,11 +337,16 @@ fn remove_control_descriptor_if_owned(path: &FsPath, session_token: &str) {
 ///
 /// Returns an error when binding, database initialization, or server startup fails.
 pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
-    let listener = TcpListener::bind(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        config.port,
-    ))
-    .await?;
+    let requested_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.port);
+    let listener = TcpListener::bind(requested_address).await.with_context(|| {
+        if config.port == 0 {
+            "unable to bind an available BA Agent loopback port".to_owned()
+        } else {
+            format!(
+                "unable to bind BA Agent to {requested_address}; the requested local port is occupied or unavailable"
+            )
+        }
+    })?;
     let address = listener.local_addr()?;
     if !address.ip().is_loopback() {
         anyhow::bail!("refusing non-loopback address: {address}");
@@ -432,6 +463,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/session", get(open_session))
+        .route("/session-recovery.css", get(session_recovery_css))
         .route("/api/v1/health", get(health))
         .nest(API_PREFIX, api)
         .route("/", get(index))
@@ -448,11 +480,7 @@ async fn open_session(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, ApiError> {
     if query.get("token").map(String::as_str) != Some(state.security.session_token.as_str()) {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "invalid launch token",
-        ));
+        return Ok(session_recovery_response());
     }
     let cookie = format!(
         "ba_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800",
@@ -468,6 +496,57 @@ async fn open_session(
         HeaderValue::from_str(&state.security.csrf_token).map_err(ApiError::internal)?,
     );
     Ok(response)
+}
+
+fn session_recovery_response() -> Response {
+    let body = r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>会话失效 · BA Agent</title>
+  <link rel="stylesheet" href="/session-recovery.css" />
+</head>
+<body>
+  <main>
+    <header><strong>BA Agent</strong><span>LOCAL CONTROL PLANE</span></header>
+    <section aria-labelledby="recovery-title">
+      <p class="status">SESSION INVALID · 会话失效</p>
+      <h1 id="recovery-title">这个启动链接已经失效</h1>
+      <p>本地服务仍然安全运行，但一次性启动凭据已更换或不正确。页面没有尝试猜测、复用或保存该凭据。</p>
+      <p lang="en">This launch link is no longer valid. The local service did not reuse or store an unverified credential.</p>
+      <ol>
+        <li><span>01</span><div><strong>打开终端</strong><p>在任意目录打开 PowerShell、Terminal 或 shell。</p></div></li>
+        <li><span>02</span><div><strong>重新打开控制台</strong><p>运行下方命令；BA Agent 会复用已验证的现有服务，或安全启动一个新服务。</p></div></li>
+      </ol>
+      <code>ba-agent-control ui</code>
+      <p class="note">不要分享终端打印的一次性会话 URL。关闭此页不会停止正在运行的任务。</p>
+    </section>
+  </main>
+</body>
+</html>"#;
+    let mut response = (StatusCode::UNAUTHORIZED, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn session_recovery_css() -> Response {
+    const CSS: &str = r#":root{color-scheme:light;--paper:#f3f0e6;--raised:#f8f6ef;--deep:#e7e1d2;--ink:#202722;--muted:#58635c;--rule:#aeb4aa;--red:#a3453f;--red-soft:#f0dcda;--brass:#805217;--header-copy:#eef1e9;--sans:"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;--mono:"Cascadia Mono",Consolas,monospace}*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55}main{width:min(760px,calc(100% - 32px));margin:clamp(24px,8vh,72px) auto;border:1px solid var(--rule);background:var(--raised)}header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 24px;background:var(--ink);color:var(--header-copy)}header strong{font-size:19px;letter-spacing:-.025em}header span,.status,code,ol>li>span{font-family:var(--mono);font-size:10px;letter-spacing:.08em}section{padding:clamp(24px,6vw,54px)}.status{display:inline-block;margin:0 0 18px;padding:6px 8px;border:1px solid var(--red);background:var(--red-soft);color:var(--red);font-weight:700}h1{max-width:18ch;margin:0 0 14px;font-size:24px;line-height:1.2;letter-spacing:-.025em;text-wrap:balance}section>p{max-width:68ch;margin:10px 0;color:var(--muted)}ol{margin:28px 0 22px;padding:0;border-block:1px solid var(--rule);list-style:none}li{display:grid;grid-template-columns:42px 1fr;gap:14px;padding:16px 0;border-bottom:1px solid color-mix(in srgb,var(--rule) 45%,transparent)}li:last-child{border-bottom:0}li span{color:var(--brass);font-weight:700}li p{margin:4px 0 0;color:var(--muted)}code{display:block;overflow-x:auto;padding:16px 18px;border:1px solid var(--ink);background:var(--deep);color:var(--ink);font-weight:700;white-space:nowrap}.note{margin-top:18px!important}::selection{background:#ead9b8;color:var(--ink)}:focus-visible{outline:3px solid var(--brass);outline-offset:3px}@media(max-width:520px){main{width:100%;margin:0;border-inline:0}header{align-items:flex-start;flex-direction:column;padding:16px 20px}section{padding:28px 20px}h1{font-size:20px}li{grid-template-columns:34px 1fr}}@media(prefers-color-scheme:dark){:root{color-scheme:dark;--paper:#19221e;--raised:#202b26;--deep:#131a17;--ink:#edf0e8;--muted:#a9b5ad;--rule:#526159;--red:#df817a;--red-soft:#4a2a29;--brass:#d5a75a}header{background:#131a17}}"#;
+    let mut response = CSS.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/css; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn session_info(State(state): State<AppState>) -> Json<Value> {
@@ -1917,6 +1996,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn descriptor_inspection_distinguishes_stopped_and_stale() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("control.json");
+        assert!(matches!(
+            inspect_control_descriptor(&path).await,
+            ControlDescriptorInspection::Missing
+        ));
+        fs::write(&path, b"not-json")?;
+        assert!(matches!(
+            inspect_control_descriptor(&path).await,
+            ControlDescriptorInspection::Stale
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn live_descriptor_reopens_the_authenticated_service() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let mut config = ServerConfig::new(directory.path().join("state.sqlite3"));
@@ -1941,6 +2036,72 @@ mod tests {
             )
             .await?;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_launch_token_returns_an_accessible_recovery_page() -> anyhow::Result<()> {
+        let application = router(state()?);
+        let response = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/session?token=invalid")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/html; charset=utf-8"))
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        assert!(
+            response
+                .headers()
+                .contains_key(header::CONTENT_SECURITY_POLICY)
+        );
+        let body = to_bytes(response.into_body(), 32 * 1024).await?;
+        let body = std::str::from_utf8(&body)?;
+        assert!(body.contains("这个启动链接已经失效"));
+        assert!(body.contains("This launch link is no longer valid"));
+        assert!(body.contains("ba-agent-control ui"));
+        assert!(body.contains("href=\"/session-recovery.css\""));
+
+        let stylesheet = application
+            .oneshot(
+                Request::builder()
+                    .uri("/session-recovery.css")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(stylesheet.status(), StatusCode::OK);
+        assert_eq!(
+            stylesheet.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/css; charset=utf-8"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_occupied_port_has_an_actionable_error() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let mut config = ServerConfig::new(directory.path().join("state.sqlite3"));
+        config.port = listener.local_addr()?.port();
+        config.control_descriptor_path = directory.path().join("control.json");
+        let error = match start(config).await {
+            Ok(server) => {
+                server.shutdown().await?;
+                anyhow::bail!("the occupied port was unexpectedly accepted");
+            }
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("requested local port is occupied or unavailable"));
         Ok(())
     }
 

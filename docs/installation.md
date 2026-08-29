@@ -35,3 +35,13 @@ On macOS, use `shasum -a 256` when `sha256sum` is unavailable. Replace the archi
 ## Data retention
 
 The default database, logs, and worktrees stay under the platform application-data directory reported by `ba-agent-control --json doctor`. Upgrade, rollback, and uninstall only manipulate the installed binary and its one previous-version sibling. To remove runtime data, first inspect the exact `dataDirectory` returned by `doctor`, stop BA Agent, back up permanent receipts, and remove that explicit directory manually; no bundled script performs this destructive step.
+
+## Local console recovery
+
+Run `ba-agent-control --json doctor` and inspect `controlService.status`:
+
+- `running`: run `ba-agent-control ui` to authenticate and reopen the existing service.
+- `stopped`: run the same command to start a new loopback service.
+- `stale`: run the same command; BA Agent replaces the stale descriptor only after confirming that it does not belong to an authenticated live BA Agent service.
+
+An expired or incorrect one-time launch URL returns a bilingual recovery page and does not persist or forward the rejected token. If the old port is no longer listening, the browser cannot repair that dead connection itself; rerunning `ba-agent-control ui` starts a new service and opens its new authenticated URL. When an explicitly requested `--port` is occupied, the CLI reports that boundary instead of describing the listener as BA Agent.

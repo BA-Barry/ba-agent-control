@@ -100,6 +100,23 @@ pub async fn doctor(paths: &DataPaths, json_output: bool) -> anyhow::Result<()> 
     store.integrity_check()?;
     let codex = CodexAdapter::new("codex").probe().await?;
     let github = GitHubAdapter::default().probe().await;
+    let control_service = match ba_server::inspect_control_descriptor(&paths.control).await {
+        ba_server::ControlDescriptorInspection::Live(descriptor) => json!({
+            "status": "running",
+            "origin": descriptor.origin,
+            "processId": descriptor.process_id,
+            "startedAt": descriptor.started_at,
+            "recovery": "run `ba-agent-control ui` to reopen the authenticated console"
+        }),
+        ba_server::ControlDescriptorInspection::Missing => json!({
+            "status": "stopped",
+            "recovery": "run `ba-agent-control ui` to start the local console"
+        }),
+        ba_server::ControlDescriptorInspection::Stale => json!({
+            "status": "stale",
+            "recovery": "run `ba-agent-control ui`; the stale descriptor will be replaced after authenticated health verification"
+        }),
+    };
     let report = json!({
         "status": if codex.available { "ready" } else { "attention" },
         "dataDirectory": paths.root,
@@ -112,6 +129,7 @@ pub async fn doctor(paths: &DataPaths, json_output: bool) -> anyhow::Result<()> 
         "codex": codex,
         "claude": version_output("claude", &["--version"]),
         "github": github,
+        "controlService": control_service,
         "telemetry": false,
         "binding": "127.0.0.1"
     });

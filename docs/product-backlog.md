@@ -82,7 +82,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 9. Improve service restart and session recovery messaging
 
-**Progress (2026-08-29):** partially complete. Running `ui` again with the default port now authenticates the descriptor through the BA Agent health endpoint and reopens the existing service instead of failing. A stale descriptor pointing at an unrelated local listener is not trusted. Expired browser pages on a stopped, no-longer-listening port still need clearer user-facing recovery guidance.
+**Progress (2026-08-29):** complete within the technical boundary of a loopback process. Running `ui` again authenticates and reopens a live service or starts a replacement; `doctor` distinguishes `running`, `stopped`, and `stale`; an invalid token receives a bilingual no-store recovery page; an unrelated listener is not trusted; and an explicitly occupied port has a precise error. A page whose old port has no listener cannot execute recovery code, so its documented recovery action is to rerun `ui`, which opens the new authenticated URL.
 
 **Current gap:** an expired browser session can remain open after the local service stops, and a briefly stale control descriptor can make a requested port appear occupied even when no listener remains.
 
