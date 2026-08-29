@@ -119,6 +119,19 @@ pub async fn doctor(paths: &DataPaths, json_output: bool) -> anyhow::Result<()> 
 }
 
 pub async fn ui(paths: &DataPaths, port: u16, no_open: bool) -> anyhow::Result<()> {
+    if port == 0
+        && let Some(descriptor) = ba_server::live_control_descriptor(&paths.control).await
+    {
+        let launch_url = format!(
+            "{}/session?token={}",
+            descriptor.origin, descriptor.session_token
+        );
+        println!("BA Agent: {launch_url} (existing service)");
+        if !no_open {
+            open_browser(&launch_url);
+        }
+        return Ok(());
+    }
     let mut config = ba_server::ServerConfig::new(paths.database.clone());
     config.port = port;
     let server = ba_server::start(config).await?;

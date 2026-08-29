@@ -39,7 +39,11 @@ use futures_util::Stream;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::{
+    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    net::{TcpListener, TcpStream},
+    sync::broadcast,
+};
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
@@ -195,14 +199,7 @@ async fn claim_control_descriptor(
 ) -> anyhow::Result<ControlClaim> {
     if let Ok(source) = fs::read_to_string(path) {
         if let Ok(existing) = serde_json::from_str::<ControlDescriptor>(&source) {
-            let live = existing.address.ip().is_loopback()
-                && tokio::time::timeout(
-                    Duration::from_millis(250),
-                    tokio::net::TcpStream::connect(existing.address),
-                )
-                .await
-                .is_ok_and(|result| result.is_ok());
-            if live {
+            if control_descriptor_is_live(&existing).await {
                 anyhow::bail!(
                     "another BA Agent control service is already listening at {}",
                     existing.address
@@ -235,6 +232,67 @@ async fn claim_control_descriptor(
         path: path.to_path_buf(),
         session_token: descriptor.session_token.clone(),
     })
+}
+
+/// Return the authenticated descriptor only when it belongs to a responsive BA Agent service.
+///
+/// A plain TCP connection is insufficient because an unrelated process may have reused the port
+/// recorded by a stale descriptor. The authenticated health response prevents opening a session
+/// token against that unrelated local process.
+pub async fn live_control_descriptor(path: &FsPath) -> Option<ControlDescriptor> {
+    let source = fs::read_to_string(path).ok()?;
+    let descriptor = serde_json::from_str::<ControlDescriptor>(&source).ok()?;
+    control_descriptor_is_live(&descriptor)
+        .await
+        .then_some(descriptor)
+}
+
+async fn control_descriptor_is_live(descriptor: &ControlDescriptor) -> bool {
+    if !descriptor.address.ip().is_loopback()
+        || descriptor.origin != format!("http://{}", descriptor.address)
+        || descriptor.session_token.len() != 64
+        || !descriptor
+            .session_token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return false;
+    }
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        Duration::from_millis(250),
+        TcpStream::connect(descriptor.address),
+    )
+    .await
+    else {
+        return false;
+    };
+    let request = format!(
+        "GET {API_PREFIX}/health HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+        descriptor.address, descriptor.session_token
+    );
+    if !matches!(
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            stream.write_all(request.as_bytes()),
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
+        return false;
+    }
+    let mut response = Vec::with_capacity(1024);
+    let mut limited = stream.take(8 * 1024);
+    let read = limited.read_to_end(&mut response);
+    if !matches!(
+        tokio::time::timeout(Duration::from_millis(500), read).await,
+        Ok(Ok(_))
+    ) {
+        return false;
+    }
+    response.starts_with(b"HTTP/1.1 200")
+        && response
+            .windows(b"\"service\":\"ba-agent-control\"".len())
+            .any(|window| window == b"\"service\":\"ba-agent-control\"")
 }
 
 fn remove_control_descriptor_if_owned(path: &FsPath, session_token: &str) {
@@ -1795,20 +1853,81 @@ mod tests {
         let path = directory.path().join("control.json");
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let address = listener.local_addr()?;
+        let session_token = "a".repeat(64);
         let descriptor = ControlDescriptor {
             address,
             origin: format!("http://{address}"),
-            session_token: "session-fixture".into(),
+            session_token,
             csrf_token: "csrf-fixture".into(),
             process_id: std::process::id(),
             started_at: now().to_rfc3339(),
         };
         let claim = claim_control_descriptor(&path, &descriptor).await?;
         assert!(path.is_file());
+        let responder = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = [0_u8; 2048];
+            let _read = stream.read(&mut request).await?;
+            let body = r#"{"service":"ba-agent-control"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await?;
+            anyhow::Ok(())
+        });
         assert!(claim_control_descriptor(&path, &descriptor).await.is_err());
+        responder.await??;
         drop(claim);
         assert!(!path.exists());
-        drop(listener);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_descriptor_requires_an_authenticated_ba_agent_health_response()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("control.json");
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let descriptor = ControlDescriptor {
+            address,
+            origin: format!("http://{address}"),
+            session_token: "b".repeat(64),
+            csrf_token: "csrf-fixture".into(),
+            process_id: std::process::id(),
+            started_at: now().to_rfc3339(),
+        };
+        fs::write(&path, serde_json::to_vec(&descriptor)?)?;
+        let responder = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = [0_u8; 2048];
+            let _read = stream.read(&mut request).await?;
+            let body = r#"{"service":"another-local-process"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await?;
+            anyhow::Ok(())
+        });
+        assert!(live_control_descriptor(&path).await.is_none());
+        responder.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_descriptor_reopens_the_authenticated_service() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let mut config = ServerConfig::new(directory.path().join("state.sqlite3"));
+        config.control_descriptor_path = directory.path().join("control.json");
+        let server = start(config).await?;
+        let descriptor = live_control_descriptor(&directory.path().join("control.json"))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("running service was not detected"))?;
+        assert_eq!(descriptor.address, server.address);
+        assert!(server.launch_url.ends_with(&descriptor.session_token));
+        server.shutdown().await?;
         Ok(())
     }
 
