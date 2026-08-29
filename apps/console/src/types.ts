@@ -47,10 +47,20 @@ export interface TaskSummary {
   scope: string
   gate: string
   dependencies: string[]
+  write: boolean
+}
+
+export interface AgentProfileSummary {
+  id: string
+  name: string
+  role: string
+  runtime: string
+  sandboxMode: 'read-only' | 'workspace-write' | string
 }
 
 export interface RunSummary {
   id: string
+  taskId: string
   taskCode: string
   taskTitle: string
   taskTitleEn: string
@@ -77,12 +87,20 @@ export interface ApprovalSummary {
 
 export interface GateResult {
   id: string
+  taskId: string
+  runId: string | null
   name: string
   nameEn: string
   status: 'passed' | 'running' | 'failed' | 'pending'
   duration: string
   command: string
   evidence: string
+}
+
+export interface ConfiguredGateSummary {
+  projectId: string
+  name: string
+  command: string
 }
 
 export interface RunEvent {
@@ -133,9 +151,12 @@ export interface ConsoleSnapshot {
   activeProjectId: string | null
   projects: ProjectSummary[]
   tasks: TaskSummary[]
+  agentProfiles: AgentProfileSummary[]
   runs: RunSummary[]
   approvals: ApprovalSummary[]
   gates: GateResult[]
+  configuredGates: ConfiguredGateSummary[]
+  gateConfigurationIssues: Record<string, string>
   events: RunEvent[]
   receipts: ReceiptSummary[]
   runtime: RuntimeStatus

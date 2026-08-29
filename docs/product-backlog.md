@@ -6,6 +6,8 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 1. Make roles usable from the console
 
+**Progress (2026-08-29):** partially complete. Dispatch now recommends one of the eight built-in profiles, lets the user make the final choice, filters write tasks to write-capable profiles, and exposes profiles through `adapter profiles`. Persisting an assignment before dispatch and adding the selector to task creation remain open.
+
 **Current gap:** BA Agent persists eight built-in Agent profiles, but the task form does not let the user choose one, the console does not recommend a profile, and profile identifiers are not discoverable through the normal CLI. Dispatch without `--agent-profile-id` launches a generic Codex run.
 
 **Target outcome:**
@@ -16,6 +18,8 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 - Add a supported CLI command for listing Agent profiles.
 
 ### 2. Finish the console-only execution path
+
+**Progress (2026-08-29):** complete for the personal Alpha. Eligible task rows can open a role-aware dispatch panel, and the quality surface can execute or retry the selected project's configured gates with live feedback. Write-task gates now execute in the originating run worktree instead of the project checkout.
 
 **Current gap:** the console can create tasks and inspect runs, approvals, gates, and receipts, but starting a dispatch and running configured quality gates still require CLI commands. This makes the Alpha unnecessarily expensive to operate for non-CLI users.
 

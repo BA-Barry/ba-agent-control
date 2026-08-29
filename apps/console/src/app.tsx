@@ -53,16 +53,18 @@ import {
   createMilestone,
   createProject,
   createTask,
+  dispatchTask,
   loadConsoleSnapshot,
   messageRun,
   respondApproval,
   retryRun,
+  runConfiguredGate,
   subscribeRunEvents,
   verifyReceipts,
   type EventStreamState,
 } from './api/console'
 import { demoSnapshot } from './data/demo'
-import type { ApprovalSummary, ConsoleSnapshot, RunEvent, RunStatus, TaskStatus, TaskSummary } from './types'
+import type { AgentProfileSummary, ApprovalSummary, ConsoleSnapshot, RunEvent, RunStatus, TaskStatus, TaskSummary } from './types'
 
 type Language = 'zh' | 'en'
 type ThemePreference = 'system' | 'light' | 'dark'
@@ -112,6 +114,50 @@ const navItems = [
   { to: '/quality', zh: '质量与收据', en: 'Quality & receipts', icon: SealCheck, count: '06' },
   { to: '/settings', zh: '设置与适配器', en: 'Settings & adapters', icon: SlidersHorizontal, count: 'ST' },
 ] as const
+
+const roleCopy: Record<string, { zh: string; en: string; detailZh: string; detailEn: string }> = {
+  coordinator: { zh: '协调员', en: 'Coordinator', detailZh: '核对依赖、工作图和需要用户决定的事项；保持只读。', detailEn: 'Checks dependencies, the work graph, and decisions that need the user; remains read-only.' },
+  planner: { zh: '规划员', en: 'Planner', detailZh: '拆分可执行任务、验收标准、依赖与验证步骤；保持只读。', detailEn: 'Defines executable tasks, acceptance criteria, dependencies, and verification; remains read-only.' },
+  explorer: { zh: '探索员', en: 'Explorer', detailZh: '追踪真实调用路径并提供文件证据；保持只读。', detailEn: 'Traces real execution paths and returns file evidence; remains read-only.' },
+  implementer: { zh: '实现者', en: 'Implementer', detailZh: '在声明范围内完成最小且完整的代码修改。', detailEn: 'Makes the smallest complete code change inside the declared scope.' },
+  reviewer: { zh: '审查员', en: 'Reviewer', detailZh: '按行为和风险优先审查，给出可复现证据；保持只读。', detailEn: 'Reviews behavior and risk with reproducible evidence; remains read-only.' },
+  test_engineer: { zh: '测试工程师', en: 'Test Engineer', detailZh: '验证可观察行为和失败路径，可在声明范围内补充测试。', detailEn: 'Tests observable behavior and failure paths and may add tests inside scope.' },
+  security_reviewer: { zh: '安全审查员', en: 'Security Reviewer', detailZh: '检查权限、输入、文件系统和凭据风险；保持只读。', detailEn: 'Inspects authorization, inputs, filesystem, and credential risk; remains read-only.' },
+  docs_reviewer: { zh: '文档审查员', en: 'Docs Reviewer', detailZh: '逐项验证文档命令、恢复和安全说明；保持只读。', detailEn: 'Verifies documented commands, recovery, and safety guidance; remains read-only.' },
+}
+
+const gateCopy: Record<string, { zh: string; en: string }> = {
+  format: { zh: '格式检查', en: 'Format check' },
+  lint: { zh: 'Lint', en: 'Lint' },
+  typecheck: { zh: '类型检查', en: 'Type check' },
+  changed_tests: { zh: '变更范围测试', en: 'Changed-scope tests' },
+  secret_scan: { zh: '秘密扫描', en: 'Secret scan' },
+  diff_review: { zh: 'Diff 审查', en: 'Diff review' },
+}
+
+function profileCopy(profile: AgentProfileSummary) {
+  return roleCopy[profile.role] ?? {
+    zh: profile.name,
+    en: profile.name,
+    detailZh: profile.role,
+    detailEn: profile.role,
+  }
+}
+
+function recommendProfile(task: TaskSummary, profiles: AgentProfileSummary[]) {
+  const signal = `${task.title} ${task.workstream}`.toLowerCase()
+  const preferredRole = task.write
+    ? /测试|test|qa/.test(signal) ? 'test_engineer' : 'implementer'
+    : /安全|security|权限|credential/.test(signal) ? 'security_reviewer'
+      : /文档|说明|docs|documentation|readme/.test(signal) ? 'docs_reviewer'
+        : /审查|review|audit/.test(signal) ? 'reviewer'
+          : /计划|拆分|plan|design/.test(signal) ? 'planner'
+            : /协调|依赖|coordinate/.test(signal) ? 'coordinator'
+              : 'explorer'
+  return profiles.find((profile) => profile.role === preferredRole)
+    ?? profiles.find((profile) => !task.write || profile.sandboxMode === 'workspace-write')
+    ?? profiles[0]
+}
 
 function DisplaySettingsControl() {
   const text = useText()
@@ -378,6 +424,7 @@ function OverviewPage() {
     scope: 'crates/ba-receipt/**',
     gate: '2 / 6',
     dependencies: ['CORE-014'],
+    write: true,
   }
   const stationPositions = [
     { left: '20%', top: '25%' }, { left: '38%', top: '42%' }, { left: '56%', top: '30%' },
@@ -577,6 +624,12 @@ function WorkflowsPage() {
   const [write, setWrite] = useState(false)
   const [scope, setScope] = useState('')
   const [feedback, setFeedback] = useState('')
+  const [dispatchTaskId, setDispatchTaskId] = useState('')
+  const [profileId, setProfileId] = useState('')
+  const dispatchCandidate = data.tasks.find((task) => task.id === dispatchTaskId)
+  const compatibleProfiles = dispatchCandidate?.write
+    ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
+    : data.agentProfiles
   useEffect(() => {
     if (data.projects.length > 0 && !data.projects.some((project) => project.id === projectId)) setProjectId(data.projects[0].id)
   }, [data.projects, projectId])
@@ -584,6 +637,12 @@ function WorkflowsPage() {
     setDependencyIds((current) => current.filter((id) =>
       data.tasks.some((task) => task.id === id && task.projectId === projectId)))
   }, [data.tasks, projectId])
+  useEffect(() => {
+    if (!dispatchCandidate) return
+    if (!compatibleProfiles.some((profile) => profile.id === profileId)) {
+      setProfileId(recommendProfile(dispatchCandidate, compatibleProfiles)?.id ?? '')
+    }
+  }, [compatibleProfiles, dispatchCandidate, profileId])
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!data.csrfToken || !projectId) throw new Error('Live project session is unavailable')
@@ -616,14 +675,53 @@ function WorkflowsPage() {
     },
     onError: (error) => setFeedback(error instanceof Error ? error.message : text('任务创建失败。', 'Task creation failed.')),
   })
+  const dispatchMutation = useMutation({
+    mutationFn: () => {
+      if (!data.csrfToken || !dispatchCandidate || !profileId) {
+        throw new Error(text('请选择一个可用角色后再派发。', 'Choose an available role before dispatching.'))
+      }
+      return dispatchTask(dispatchCandidate.id, profileId, data.csrfToken)
+    },
+    onSuccess: async () => {
+      setFeedback(text('任务已派发；运行详情将持续接收事件。', 'Task dispatched; Run detail will continue receiving events.'))
+      setDispatchTaskId('')
+      setProfileId('')
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setFeedback(error instanceof Error ? error.message : text('任务派发失败。', 'Task dispatch failed.')),
+  })
+  const beginDispatch = useCallback((task: TaskSummary) => {
+    setFormOpen(false)
+    setFeedback('')
+    setDispatchTaskId(task.id)
+    const profiles = task.write
+      ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
+      : data.agentProfiles
+    setProfileId(recommendProfile(task, profiles)?.id ?? '')
+  }, [data.agentProfiles])
   const columns = useMemo(() => [
     columnHelper.accessor('code', { header: text('测站', 'Station'), cell: (info) => <b className="mono accent-green">{info.getValue()}</b> }),
     columnHelper.accessor('title', { header: text('任务 / 范围', 'Task / scope'), cell: (info) => <span className="task-title-cell"><strong>{text(info.getValue(), info.row.original.titleEn)}</strong><small className="mono">{info.row.original.scope}</small></span> }),
     columnHelper.accessor('workstream', { header: text('工作流', 'Workstream'), cell: (info) => text(info.getValue(), info.row.original.workstreamEn) }),
-    columnHelper.accessor('role', { header: text('角色', 'Role') }),
+    columnHelper.accessor('role', { header: text('角色', 'Role'), cell: (info) => {
+      const copy = roleCopy[info.getValue()]
+      return copy ? text(copy.zh, copy.en) : text('未指定', 'Unassigned')
+    } }),
     columnHelper.accessor('status', { header: text('状态', 'Status'), cell: (info) => <StatusText status={info.getValue()} /> }),
     columnHelper.accessor('gate', { header: text('质量门', 'Gates'), cell: (info) => <span className="mono">{info.getValue()}</span> }),
-  ], [text])
+    columnHelper.display({ id: 'actions', header: text('动作', 'Action'), cell: (info) => {
+      const task = info.row.original
+      const eligible = data.source === 'live' && data.runtime.available && (task.status === 'draft' || task.status === 'ready')
+      const reason = data.source !== 'live'
+        ? text('本地服务未连接', 'Local service is disconnected')
+        : !data.runtime.available
+          ? text('Codex 运行时未就绪', 'Codex runtime is not ready')
+          : task.status !== 'draft' && task.status !== 'ready'
+            ? text(`当前状态 ${task.status} 不可派发`, `Status ${task.status} cannot be dispatched`)
+            : text('选择角色并派发', 'Choose a role and dispatch')
+      return <button className="field-action compact" type="button" disabled={!eligible || dispatchMutation.isPending} title={reason} aria-expanded={dispatchTaskId === task.id} onClick={() => beginDispatch(task)}><Play size={14} />{text('派发', 'Dispatch')}</button>
+    } }),
+  ], [beginDispatch, data.runtime.available, data.source, dispatchMutation.isPending, dispatchTaskId, text])
   const table = useReactTable({ data: data.tasks, columns, getCoreRowModel: getCoreRowModel() })
   const dependentTask = data.tasks.find((task) => task.dependencies.length > 0)
   const downstreamTask = dependentTask
@@ -634,7 +732,8 @@ function WorkflowsPage() {
     : <button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => setFormOpen((value) => !value)}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button>
   return <section className="register-page"><PageHeader titleZh="工作流与任务导线" titleEn="Workflow and task traverse" descriptionZh="依赖、写入范围、角色与质量门在同一登记面上保持可见。" descriptionEn="Dependencies, write scopes, roles, and gates remain visible in one register." action={action} />
     {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW STATION</span><h3>{text('创建任务草稿', 'Create a task draft')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选新建）', 'New workstream name (optional)')}<input value={workstreamName} onChange={(event) => setWorkstreamName(event.target.value)} /></label><label className="wide-field">{text('前置任务（可多选）', 'Dependencies (multiple)')}<select multiple value={dependencyIds} onChange={(event) => setDependencyIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{data.tasks.filter((task) => task.projectId === projectId).map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)}</option>)}</select></label><label className="wide-field">{text('任务标题', 'Task title')}<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide-field">{text('说明与验收', 'Description and acceptance')}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="check-field"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} />{text('需要写入仓库', 'Writes to the repository')}</label>{write && <label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={scope} onChange={(event) => setScope(event.target.value)} placeholder="apps/console/**" /></label>}</div><footer><span>{text('任务先保存为草稿，派发前仍会执行依赖和范围检查。', 'Tasks start as drafts; dependency and scope checks still run before dispatch.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || (write && !scope.trim())}>{createMutation.isPending ? text('创建中…', 'Creating…') : text('创建草稿', 'Create draft')}</button></footer></form>}
-    {feedback && <p className={clsx('operation-feedback', createMutation.isError && 'is-error')} role="status">{feedback}</p>}
+    {dispatchCandidate && <form className="operation-panel dispatch-panel" onSubmit={(event) => { event.preventDefault(); dispatchMutation.mutate() }}><header><span className="measure-label">DISPATCH STATION</span><h3>{text(`派发 ${dispatchCandidate.code}`, `Dispatch ${dispatchCandidate.code}`)}</h3><p>{text(dispatchCandidate.title, dispatchCandidate.titleEn)}</p></header><div className="operation-fields"><label>{text('Agent 角色', 'Agent role')}<select required value={profileId} onChange={(event) => setProfileId(event.target.value)}>{compatibleProfiles.map((profile) => { const copy = profileCopy(profile); return <option key={profile.id} value={profile.id}>{text(copy.zh, copy.en)} · {profile.sandboxMode === 'workspace-write' ? text('可写', 'write') : text('只读', 'read-only')}</option> })}</select></label><div className="role-brief wide-field" aria-live="polite">{(() => { const profile = compatibleProfiles.find((item) => item.id === profileId); if (!profile) return <p>{text('没有与该任务权限匹配的角色。', 'No role matches this task permission.')}</p>; const copy = profileCopy(profile); return <><strong>{text(copy.zh, copy.en)}</strong><p>{text(copy.detailZh, copy.detailEn)}</p></> })()}</div></div><footer><span>{dispatchCandidate.write ? text(`写入范围：${dispatchCandidate.scope}。将创建独立 worktree。`, `Write scope: ${dispatchCandidate.scope}. A separate worktree will be created.`) : text('只读任务不会创建 worktree，也不得修改仓库文件。', 'Read-only work will not create a worktree and must not modify repository files.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={dispatchMutation.isPending} onClick={() => setDispatchTaskId('')}>{text('取消', 'Cancel')}</button><button className="field-action primary" type="submit" disabled={dispatchMutation.isPending || !profileId}>{dispatchMutation.isPending ? text('派发中…', 'Dispatching…') : text('确认派发', 'Confirm dispatch')}</button></div></footer></form>}
+    {feedback && <p className={clsx('operation-feedback', (createMutation.isError || dispatchMutation.isError) && 'is-error')} role="status">{feedback}</p>}
     {data.tasks.length === 0 ? <EmptyRegister titleZh="尚无任务导线" titleEn="No task traverse yet" detailZh="创建工作流和任务后，依赖、范围、角色与质量门会显示在这里。" detailEn="Create a workstream and tasks to show dependencies, scopes, roles, and gates here." /> : <><div className="table-frame" tabIndex={0} role="region" aria-label={text('任务登记表', 'Task register table')}><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
     {dependentTask && <section className="dependency-strip"><div><span className="measure-label">DEPENDENCY</span><strong>{dependentTask.dependencies[0]}</strong></div><i /><div><span className="measure-label">UNLOCKS</span><strong>{dependentTask.code}</strong></div><i /><div><span className="measure-label">UNLOCKS</span><strong>{downstreamTask?.code ?? '—'}</strong></div><p>{text('写入范围存在交集时默认串行；调度器会隔离独立 worktree。', 'Overlapping write scopes serialize by default; the scheduler isolates independent worktrees.')}</p></section>}</>}
   </section>
@@ -774,12 +873,31 @@ function ApprovalsPage() {
 function QualityPage() {
   const text = useText()
   const { data } = useConsoleSnapshot()
+  const queryCache = useQueryClient()
+  const [taskId, setTaskId] = useState(data.tasks.find((task) => task.status === 'review')?.id ?? data.tasks[0]?.id ?? '')
   const [verification, setVerification] = useState<'idle' | 'valid' | 'invalid'>('idle')
   const [feedback, setFeedback] = useState('')
+  const [gateFeedback, setGateFeedback] = useState('')
+  const selectedTask = data.tasks.find((task) => task.id === taskId) ?? data.tasks[0]
+  const selectedRun = selectedTask
+    ? data.runs.find((run) => run.taskId === selectedTask.id && run.status === 'succeeded')
+      ?? data.runs.find((run) => run.taskId === selectedTask.id)
+    : undefined
+  const configuredGates = selectedTask
+    ? data.configuredGates.filter((gate) => gate.projectId === selectedTask.projectId)
+    : []
+  const gateConfigurationIssue = selectedTask ? data.gateConfigurationIssues[selectedTask.projectId] : undefined
+  const taskGateResults = selectedTask ? data.gates.filter((gate) => gate.taskId === selectedTask.id) : []
+  useEffect(() => {
+    if (data.tasks.length > 0 && !data.tasks.some((task) => task.id === taskId)) {
+      setTaskId(data.tasks.find((task) => task.status === 'review')?.id ?? data.tasks[0]?.id ?? '')
+    }
+  }, [data.tasks, taskId])
   const verifyMutation = useMutation({
     mutationFn: () => {
-      if (!data.activeProjectId || !data.csrfToken) throw new Error('Live project session is unavailable')
-      return verifyReceipts(data.activeProjectId, data.csrfToken)
+      const projectId = selectedTask?.projectId ?? data.activeProjectId
+      if (!projectId || !data.csrfToken) throw new Error('Live project session is unavailable')
+      return verifyReceipts(projectId, data.csrfToken)
     },
     onSuccess: (result) => {
       setVerification(result.valid ? 'valid' : 'invalid')
@@ -790,6 +908,22 @@ function QualityPage() {
       setFeedback(error instanceof Error ? error.message : text('收据链验证失败。', 'Receipt chain verification failed.'))
     },
   })
+  const gateMutation = useMutation({
+    mutationFn: (gate: string) => {
+      if (!selectedTask || !selectedRun || !data.csrfToken) {
+        throw new Error(text('任务尚无可关联的运行。', 'The task does not have a run to associate with the gate.'))
+      }
+      if (selectedTask.status !== 'review') {
+        throw new Error(text(`任务状态为 ${selectedTask.status}，只有 review 状态可以执行质量门。`, `Task status is ${selectedTask.status}; gates run only in review.`))
+      }
+      return runConfiguredGate(selectedTask.id, selectedRun.id, gate, data.csrfToken)
+    },
+    onSuccess: async (_result, gate) => {
+      setGateFeedback(text(`${gate} 已完成，结果和最终化状态已刷新。`, `${gate} completed; results and finalization state were refreshed.`))
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setGateFeedback(error instanceof Error ? error.message : text('质量门执行失败。', 'Quality gate failed to run.')),
+  })
   const runVerification = () => {
     if (data.source === 'live') verifyMutation.mutate()
     else {
@@ -797,11 +931,24 @@ function QualityPage() {
       setFeedback(text('演示模式：展示已验证结果，未执行真实校验。', 'Demo mode: showing a verified result without running a live check.'))
     }
   }
-  const passedGates = data.gates.filter((gate) => gate.status === 'passed').length
+  const gateRows = configuredGates.map((configured) => {
+    const result = [...taskGateResults].reverse().find((gate) => gate.name === configured.name)
+    return {
+      ...configured,
+      result,
+      status: result?.status ?? 'pending' as const,
+      duration: result?.duration ?? '—',
+      evidence: result?.evidence ?? text('等待执行', 'Waiting to run'),
+    }
+  })
+  const passedGates = gateRows.filter((gate) => gate.status === 'passed').length
   const head = data.metrics.receiptHead ? `${data.metrics.receiptHead.slice(0, 8)}…${data.metrics.receiptHead.slice(-4)}` : '—'
   return <section className="register-page"><PageHeader titleZh="质量门与永久收据" titleEn="Quality gates and permanent receipts" descriptionZh="命令证据按阶段登记；详细日志可清理，哈希链收据永久保留。" descriptionEn="Command evidence is recorded by stage; detailed logs may expire while hash-chain receipts remain permanent." action={<button className="field-action primary" disabled={verifyMutation.isPending || !data.activeProjectId} onClick={runVerification}>{text('验证收据链', 'Verify receipt chain')}</button>} />
     {feedback && <p className={clsx('operation-feedback', verification === 'invalid' && 'is-error')} role="status">{feedback}</p>}
-    <div className="quality-layout"><section className="gate-register"><header><h3>{text('当前质量门', 'Current quality gates')}</h3><span className="mono">{data.tasks[0]?.code ?? '—'} · {passedGates} / {data.gates.length}</span></header>{data.gates.length === 0 ? <EmptyRegister titleZh="尚无质量门结果" titleEn="No quality gate results" detailZh="质量门执行后，命令、耗时与证据会登记在这里。" detailEn="Commands, duration, and evidence appear here after gates run." /> : data.gates.map((gate) => <article key={gate.id}><span className={clsx('gate-icon', `gate-${gate.status}`)}>{gate.status === 'passed' ? <CheckCircle /> : gate.status === 'running' ? <Clock /> : gate.status === 'failed' ? <XCircle /> : <span />}</span><div><strong>{text(gate.name, gate.nameEn)}</strong><code>{gate.command}</code></div><span className="mono">{gate.duration}</span><p>{gate.evidence}</p></article>)}</section>
+    <section className="quality-controls" aria-label={text('质量门任务选择', 'Quality-gate task selection')}><label>{text('检查任务', 'Task to verify')}<select value={selectedTask?.id ?? ''} onChange={(event) => { setTaskId(event.target.value); setGateFeedback('') }}>{data.tasks.map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)} · {task.status}</option>)}</select></label><p>{selectedTask?.status === 'review' ? text('运行成功，质量门可以逐项执行；全部通过后自动生成提交或只读收据。', 'The run succeeded. Execute gates individually; all passes create a commit or read-only receipt.') : text('选择处于 review 状态且已有成功 Run 的任务，才能执行质量门。', 'Select a task in review with a succeeded Run to execute gates.')}</p></section>
+    {gateConfigurationIssue && <p className="operation-feedback is-error" role="status">{text('无法读取项目质量门配置：', 'Unable to read project gate configuration: ')} {gateConfigurationIssue}</p>}
+    {gateFeedback && <p className={clsx('operation-feedback', gateMutation.isError && 'is-error')} role="status">{gateFeedback}</p>}
+    <div className="quality-layout"><section className="gate-register"><header><h3>{text('当前质量门', 'Current quality gates')}</h3><span className="mono">{selectedTask?.code ?? '—'} · {passedGates} / {gateRows.length}</span></header>{gateRows.length === 0 ? <EmptyRegister titleZh="项目尚未配置质量门" titleEn="No quality gates configured" detailZh="在项目的 .ba-agent/project.toml 中配置质量门后，可在这里逐项执行。" detailEn="Configure gates in .ba-agent/project.toml to run them here." /> : gateRows.map((gate) => { const copy = gateCopy[gate.name] ?? { zh: gate.name, en: gate.name }; return <article key={gate.name}><span className={clsx('gate-icon', `gate-${gate.status}`)}>{gate.status === 'passed' ? <CheckCircle /> : gate.status === 'running' ? <Clock /> : gate.status === 'failed' ? <XCircle /> : <span />}</span><div><strong>{text(copy.zh, copy.en)}</strong><code>{gate.command}</code></div><span className="mono">{gate.duration}</span><p>{gate.evidence}</p><button className="field-action compact" type="button" disabled={data.source !== 'live' || selectedTask?.status !== 'review' || !selectedRun || gateMutation.isPending} onClick={() => gateMutation.mutate(gate.name)}>{gateMutation.isPending && gateMutation.variables === gate.name ? text('执行中…', 'Running…') : gate.result ? text('重新执行', 'Run again') : text('执行', 'Run')}</button></article> })}</section>
       <aside className="receipt-ledger"><span className="measure-label">CANONICAL JSON + SHA-256</span><h3>{text('收据链', 'Receipt chain')}</h3><div className="hash-chain" role="img" aria-label={text('四个连续收据节点', 'Four continuous receipt nodes')}><i /><span /><i /><span /><i /><span /><i /></div><dl><div><dt>{text('当前头', 'Current head')}</dt><dd className="mono">{head}</dd></div><div><dt>{text('链状态', 'Chain status')}</dt><dd className={verification === 'invalid' ? 'accent-red' : 'accent-green'}>{verification === 'valid' ? text('连续且已验证', 'Continuous and verified') : verification === 'invalid' ? text('验证失败', 'Verification failed') : text('等待验证', 'Awaiting verification')}</dd></div><div><dt>{text('永久收据', 'Permanent receipts')}</dt><dd className="mono">{data.metrics.receiptCount}</dd></div><div><dt>{text('日志保留', 'Log retention')}</dt><dd className="mono">90 DAYS</dd></div></dl><DemoActionButton labelZh="导出验证报告" labelEn="Export verification report" messageZh="当前 Alpha 尚未写出验证报告文件。" messageEn="The current Alpha does not write a verification-report file yet." /></aside></div>
   </section>
 }

@@ -406,7 +406,7 @@ pub fn receipt(paths: &DataPaths, command: ReceiptCommand, json: bool) -> anyhow
     }
 }
 
-pub async fn adapter(command: AdapterCommand, json: bool) -> anyhow::Result<()> {
+pub async fn adapter(paths: &DataPaths, command: AdapterCommand, json: bool) -> anyhow::Result<()> {
     match command {
         AdapterCommand::List => emit(
             &json!([
@@ -416,6 +416,7 @@ pub async fn adapter(command: AdapterCommand, json: bool) -> anyhow::Result<()> 
             ]),
             json,
         ),
+        AdapterCommand::Profiles => emit(&paths.store()?.list_agent_profiles()?, json),
         AdapterCommand::Probe { adapter } if adapter == "codex" => {
             emit(&CodexAdapter::new("codex").probe().await?, json)
         }

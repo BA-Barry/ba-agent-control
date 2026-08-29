@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { createMilestone, createProject, createTask, loadConsoleSnapshot, mapRunEvent, retryRun, subscribeRunEvents } from './console'
+import { createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, retryRun, runConfiguredGate, subscribeRunEvents } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -33,7 +33,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
     const url = String(input)
     if (url === '/api/v1/session') return json({ csrfToken: 'csrf', origin: 'http://127.0.0.1:41415', expiresInSeconds: 28800 })
     if (url === '/api/v1/overview') return json({ projects: [project], pendingApprovals: 1, runningRuns: 1, failedRuns: 0, orphanedRuns: 0 })
-    if (url === '/api/v1/agent-profiles') return json([{ id: run.agent_profile_id, name: 'Implementer', role: 'Implementer', runtime: 'codex' }])
+    if (url === '/api/v1/agent-profiles') return json([{ id: run.agent_profile_id, name: 'Implementer', role: 'implementer', runtime: 'codex', config: { sandboxMode: 'workspace-write' } }])
     if (url === '/api/v1/approvals') return json([{ id: '01APPROVAL000000000000001', run_id: run.id, kind: 'git.push', status: 'pending', request: { branch: 'ba/live' }, requested_at: '2026-08-24T10:01:00Z' }])
     if (url === '/api/v1/adapters') return json({ adapters: [{ id: 'codex', capabilities: {
       available: true, authenticated: true, version: { major: 0, minor: 149, patch: 1 },
@@ -53,6 +53,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
       run_id: run.id, path: 'G:\\BA Agent Data\\worktrees\\live-001', status: 'active',
     }])
     if (url.startsWith('/api/v1/receipts?')) return json([{ id: '01RECEIPT000000000000001', project_id: project.id, kind: 'gate', previous_hash: null, hash: 'abcdef1234567890', created_at: '2026-08-24T10:02:00Z' }])
+    if (url.startsWith('/api/v1/gates/configured?')) return json({ projectId: project.id, gates: [{ name: 'lint', program: 'pnpm', args: ['lint'] }], unavailableReason: null })
     if (url.startsWith('/api/v1/gates?')) return json([{ id: '01GATE0000000000000000001', task_id: task.id, run_id: run.id, name: 'lint', status: 'passed', command: 'pnpm lint', result: { summary: '0 warnings' }, created_at: '2026-08-24T10:00:00Z', completed_at: '2026-08-24T10:00:03Z' }])
     return json({ message: `unexpected request: ${url}` }, 404)
   })
@@ -67,7 +68,9 @@ test('maps the authenticated local API into a live console snapshot', async () =
     name: 'live-repository', milestone: 'Personal Alpha', progress: 0,
     activeRuns: 1, receiptHead: 'abcdef12…7890',
   })
-  expect(snapshot.tasks[0]).toMatchObject({ title: 'Connect local API', workstream: 'Console', role: 'Implementer', gate: '1 / 1' })
+  expect(snapshot.tasks[0]).toMatchObject({ title: 'Connect local API', workstream: 'Console', role: 'implementer', gate: '1 / 1', write: true })
+  expect(snapshot.agentProfiles[0]).toMatchObject({ role: 'implementer', sandboxMode: 'workspace-write' })
+  expect(snapshot.configuredGates[0]).toMatchObject({ projectId: project.id, name: 'lint', command: 'pnpm lint' })
   expect(snapshot.runs[0]).toMatchObject({
     runtime: 'app-server',
     worktree: 'G:\\BA Agent Data\\worktrees\\live-001',
@@ -138,11 +141,13 @@ test('reports SSE connection and disconnection while accepting the stable event 
   expect(source.closed).toBe(true)
 })
 
-test('sends CSRF-protected project creation and retry mutations', async () => {
+test('sends CSRF-protected creation, dispatch, gate, and retry mutations', async () => {
   const fetchMock = vi.fn()
     .mockImplementationOnce(() => json({ id: '01PROJECT' }, 201))
     .mockImplementationOnce(() => json({ id: '01MILESTONE' }, 201))
     .mockImplementationOnce(() => json({ id: '01TASK' }, 201))
+    .mockImplementationOnce(() => json({ run: { id: '01RUN1' }, dispatch: { id: '01DISPATCH' } }, 202))
+    .mockImplementationOnce(() => json({ gate: { id: '01GATE' }, finalization: null }))
     .mockImplementationOnce(() => json({ mode: 'retried', run: { id: '01RUN2' } }, 202))
   vi.stubGlobal('fetch', fetchMock)
 
@@ -155,6 +160,8 @@ test('sends CSRF-protected project creation and retry mutations', async () => {
     projectId: '01PROJECT', workstreamId: null, workstreamName: 'Console', milestoneId: '01MILESTONE',
     title: 'Atomic task', description: '', write: true, pathScope: ['apps/console/**'], dependsOn: ['01DEPENDENCY'],
   }, 'csrf-token')
+  await dispatchTask('01TASK', '01PROFILE', 'csrf-token')
+  await runConfiguredGate('01TASK', '01RUN1', 'lint', 'csrf-token')
   await retryRun('01RUN1', 'csrf-token')
 
   expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/projects', expect.objectContaining({
@@ -173,7 +180,17 @@ test('sends CSRF-protected project creation and retry mutations', async () => {
   expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toMatchObject({
     workstreamName: 'Console', milestoneId: '01MILESTONE', pathScope: ['apps/console/**'],
   })
-  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/runs/01RUN1/retry', expect.objectContaining({
+  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/dispatches', expect.objectContaining({
+    method: 'POST',
+    headers: expect.objectContaining({ 'x-ba-csrf-token': 'csrf-token' }),
+  }))
+  expect(JSON.parse(fetchMock.mock.calls[3][1].body as string)).toMatchObject({ taskId: '01TASK', agentProfileId: '01PROFILE' })
+  expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/v1/gates/run', expect.objectContaining({
+    method: 'POST',
+    headers: expect.objectContaining({ 'x-ba-csrf-token': 'csrf-token' }),
+  }))
+  expect(JSON.parse(fetchMock.mock.calls[4][1].body as string)).toMatchObject({ taskId: '01TASK', runId: '01RUN1', gate: 'lint' })
+  expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/v1/runs/01RUN1/retry', expect.objectContaining({
     method: 'POST',
     headers: expect.objectContaining({ 'x-ba-csrf-token': 'csrf-token' }),
   }))

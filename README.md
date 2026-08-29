@@ -2,7 +2,7 @@
 
 BA Agent (`ba-agent-control`) is a local-first control plane for coordinating auditable AI-assisted development across multiple Git projects. It reuses your authenticated Codex CLI, isolates write tasks in worktrees, pauses risky operations for approval, and stores permanent hash-chained quality receipts.
 
-> Status: the personal Alpha feature set, three-workflow self-hosting acceptance, hosted CI, private four-platform release-candidate certification, and release-owner technical license sign-off are complete. Manual accessibility remains before Public Beta; no tag, GitHub Release, or public archive has been published.
+> Status: the personal Alpha feature set, three-workflow self-hosting acceptance, hosted CI, private four-platform release-candidate certification, release-owner technical license sign-off, and manual accessibility acceptance are complete. No tag, GitHub Release, or public archive has been published.
 
 ## What works in this Alpha
 
@@ -14,7 +14,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Probe GitHub credentials safely and inspect repository metadata without enabling remote writes.
 - Generate Codex and Claude-compatible project configuration without overwriting user-owned content.
 - Import and safely restore runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.
-- Operate all seven bilingual console surfaces with real local API/SSE data, system/light/dark appearance, three materially different interface themes, keyboard navigation, project/task creation, run control, approvals, and receipt verification.
+- Operate all seven bilingual console surfaces with real local API/SSE data, system/light/dark appearance, three materially different interface themes, keyboard navigation, project/task creation, role-aware dispatch, configured gate execution, run control, approvals, and receipt verification.
 
 The console follows the approved comp-first “测量员外业簿” direction and is embedded into the Rust binary. When the local service is unavailable it enters an explicitly labeled demonstration mode instead of presenting sample data as live state.
 
@@ -26,6 +26,7 @@ Prerequisites: Rust stable, Node.js 24, pnpm 11.19.0, Git, and Codex CLI 0.130.0
 pnpm install --frozen-lockfile
 pnpm build
 cargo run -p ba-agent-control -- doctor
+cargo run -p ba-agent-control -- adapter profiles
 cargo run -p ba-agent-control -- ui
 ```
 

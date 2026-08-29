@@ -32,7 +32,7 @@ use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, Runt
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
     RecoveryAction, RecoveryCoordinator, RuntimeCoordinator, configured_gate,
-    ensure_builtin_agent_profiles,
+    configured_gate_names, ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
 use futures_util::Stream;
@@ -364,6 +364,7 @@ pub fn router(state: AppState) -> Router {
         .route("/approvals", get(list_approvals))
         .route("/approvals/{id}/respond", post(respond_approval))
         .route("/gates", get(list_gates))
+        .route("/gates/configured", get(list_configured_gates))
         .route("/gates/run", post(run_gate))
         .route("/receipts", get(list_receipts))
         .route("/receipts/verify", post(verify_receipts))
@@ -1137,6 +1138,62 @@ async fn list_gates(
     )))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfiguredGateResource {
+    name: String,
+    program: String,
+    args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfiguredGatesResource {
+    project_id: String,
+    gates: Vec<ConfiguredGateResource>,
+    unavailable_reason: Option<String>,
+}
+
+async fn list_configured_gates(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<ConfiguredGatesResource>, ApiError> {
+    let project_id = parse_id(&query.project_id)?;
+    let project = state
+        .store
+        .get_project(&project_id)?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
+    let project_root = PathBuf::from(&project.root_path)
+        .canonicalize()
+        .map_err(ApiError::internal)?;
+    let names = match configured_gate_names(&project_root) {
+        Ok(names) => names,
+        Err(error) => {
+            return Ok(Json(ConfiguredGatesResource {
+                project_id: project_id.to_string(),
+                gates: Vec::new(),
+                unavailable_reason: Some(error.to_string()),
+            }));
+        }
+    };
+    let gates = names
+        .into_iter()
+        .map(|name| {
+            configured_gate(&project_root, &name).map(|gate| ConfiguredGateResource {
+                name: gate.name,
+                program: gate.program,
+                args: gate.args,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ApiError::internal)?;
+    Ok(Json(ConfiguredGatesResource {
+        project_id: project_id.to_string(),
+        gates,
+        unavailable_reason: None,
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RunGateInput {
@@ -1173,8 +1230,9 @@ async fn run_gate(
             return Err(ApiError::bad_request("run belongs to a different task"));
         }
     }
+    let gate_cwd = gate_working_directory(&state, &task, run_id.as_ref(), &project_root)?;
     let gate = GateCoordinator::new(state.store.clone())
-        .run(&task_id, run_id.as_ref(), &project_root, &definition)
+        .run(&task_id, run_id.as_ref(), &gate_cwd, &definition)
         .await
         .map_err(ApiError::internal)?;
     if let Some(run_id) = &run_id {
@@ -1193,6 +1251,29 @@ async fn run_gate(
         let _event = state.append_event(run_id, event, json!({"finalization": finalization}))?;
     }
     Ok(Json(json!({"gate": gate, "finalization": finalization})))
+}
+
+fn gate_working_directory(
+    state: &AppState,
+    task: &Task,
+    run_id: Option<&EntityId>,
+    project_root: &FsPath,
+) -> Result<PathBuf, ApiError> {
+    if !task.write {
+        return Ok(project_root.to_path_buf());
+    }
+    let run_id = run_id.ok_or_else(|| {
+        ApiError::bad_request("write-task quality gates require the originating run_id")
+    })?;
+    let worktree = state
+        .store
+        .list_worktrees(&task.project_id)?
+        .into_iter()
+        .find(|worktree| worktree.task_id == task.id && worktree.run_id.as_ref() == Some(run_id))
+        .ok_or_else(|| ApiError::not_found("worktree for run not found"))?;
+    PathBuf::from(worktree.path)
+        .canonicalize()
+        .map_err(|error| ApiError::internal(format!("worktree is unavailable: {error}")))
 }
 
 async fn list_receipts(
@@ -1406,7 +1487,7 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
     use axum::http::Request;
-    use ba_core::{Run, RunStatus};
+    use ba_core::{Run, RunStatus, WorktreeStatus};
     use ba_runtime::{
         ApprovalDecision, CodexVersion, MINIMUM_CODEX_VERSION, ResumeRequest, RunRequest,
         RuntimeAdapter, RuntimeCapabilities, RuntimeError, RuntimeEvent, RuntimeEventKind,
@@ -1534,6 +1615,117 @@ mod tests {
         assert_eq!(codex["available"], true);
         assert_eq!(codex["authenticated"], true);
         assert_eq!(codex["app_server"], true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_gates_are_discoverable_without_breaking_uninitialized_projects()
+    -> anyhow::Result<()> {
+        let state = state()?;
+        let repository = tempdir()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Configured gates".into(),
+            root_path: repository.path().to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+
+        let Json(uninitialized) = list_configured_gates(
+            State(state.clone()),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert!(uninitialized.gates.is_empty());
+        assert!(uninitialized.unavailable_reason.is_some());
+
+        fs::create_dir_all(repository.path().join(".ba-agent"))?;
+        fs::write(
+            repository.path().join(".ba-agent/project.toml"),
+            "[gates]\nlint = [\"cargo\", \"check\"]\n",
+        )?;
+        let Json(configured) = list_configured_gates(
+            State(state),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert!(configured.unavailable_reason.is_none());
+        assert_eq!(configured.gates.len(), 1);
+        assert_eq!(configured.gates[0].name, "lint");
+        assert_eq!(configured.gates[0].program, "cargo");
+        assert_eq!(configured.gates[0].args, ["check"]);
+        Ok(())
+    }
+
+    #[test]
+    fn write_task_gates_use_the_originating_run_worktree() -> anyhow::Result<()> {
+        let state = state()?;
+        let repository = tempdir()?;
+        let worktree = tempdir()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Worktree gate".into(),
+            root_path: repository.path().to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+        let task = Task {
+            id: EntityId::new(),
+            project_id: project.id.clone(),
+            workstream_id: None,
+            milestone_id: None,
+            title: "Write safely".into(),
+            description: String::new(),
+            status: TaskStatus::Review,
+            write: true,
+            path_scope: vec!["src/**".into()],
+            depends_on: Vec::new(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_task(&task)?;
+        let run = Run {
+            id: EntityId::new(),
+            task_id: task.id.clone(),
+            agent_profile_id: None,
+            status: RunStatus::Succeeded,
+            adapter: "mock".into(),
+            runtime_run_id: Some("runtime".into()),
+            runtime_thread_id: Some("thread".into()),
+            started_at: Some(stamp),
+            finished_at: Some(stamp),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_run(&run)?;
+        state.store.upsert_worktree(&Worktree {
+            id: EntityId::new(),
+            project_id: project.id,
+            task_id: task.id.clone(),
+            run_id: Some(run.id.clone()),
+            path: worktree.path().to_string_lossy().into_owned(),
+            base_revision: None,
+            write_scope: vec!["src/**".into()],
+            branch: None,
+            status: WorktreeStatus::Active,
+            created_at: stamp,
+            updated_at: stamp,
+        })?;
+
+        let cwd = gate_working_directory(&state, &task, Some(&run.id), repository.path())?;
+        assert_eq!(cwd, worktree.path().canonicalize()?);
         Ok(())
     }
 

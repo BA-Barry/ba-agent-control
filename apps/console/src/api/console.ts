@@ -1,6 +1,8 @@
 import { demoSnapshot } from '../data/demo'
 import type {
+  AgentProfileSummary,
   ApprovalSummary,
+  ConfiguredGateSummary,
   ConsoleSnapshot,
   GateResult,
   ProjectSummary,
@@ -76,6 +78,19 @@ interface ApiAgentProfile {
   name: string
   role: string
   runtime: string
+  config?: {
+    sandboxMode?: string
+  }
+}
+
+interface ApiConfiguredGatesResponse {
+  projectId: string
+  gates: Array<{
+    name: string
+    program: string
+    args: string[]
+  }>
+  unavailableReason: string | null
 }
 
 interface ApiRun {
@@ -168,6 +183,7 @@ interface ProjectBundle {
   runs: ApiRun[]
   worktrees: ApiWorktree[]
   gates: ApiGate[]
+  configuredGates: ApiConfiguredGatesResponse
   receipts: ApiReceipt[]
 }
 
@@ -296,18 +312,19 @@ function gateDuration(gate: ApiGate) {
 }
 
 async function loadProjectBundle(project: ApiProject): Promise<ProjectBundle> {
-  const [workstreams, milestones, tasks, runs, worktrees, receipts] = await Promise.all([
+  const [workstreams, milestones, tasks, runs, worktrees, receipts, configuredGates] = await Promise.all([
     apiFetch<ApiWorkstream[]>(query('/api/v1/workstreams', 'project_id', project.id)),
     apiFetch<ApiMilestone[]>(query('/api/v1/milestones', 'project_id', project.id)),
     apiFetch<ApiTask[]>(query('/api/v1/tasks', 'project_id', project.id)),
     apiFetch<ApiRun[]>(query('/api/v1/runs', 'project_id', project.id)),
     apiFetch<ApiWorktree[]>(query('/api/v1/worktrees', 'project_id', project.id)),
     apiFetch<ApiReceipt[]>(query('/api/v1/receipts', 'project_id', project.id)),
+    apiFetch<ApiConfiguredGatesResponse>(query('/api/v1/gates/configured', 'project_id', project.id)),
   ])
   const gates = (await Promise.all(tasks.map((task) =>
     apiFetch<ApiGate[]>(query('/api/v1/gates', 'task_id', task.id)),
   ))).flat()
-  return { project, workstreams, milestones, tasks, runs, worktrees, gates, receipts }
+  return { project, workstreams, milestones, tasks, runs, worktrees, gates, configuredGates, receipts }
 }
 
 function mapSnapshot(
@@ -321,6 +338,18 @@ function mapSnapshot(
   const allTasks = bundles.flatMap((bundle) => bundle.tasks)
   const allRuns = bundles.flatMap((bundle) => bundle.runs)
   const allGates = bundles.flatMap((bundle) => bundle.gates)
+  const configuredGates: ConfiguredGateSummary[] = bundles.flatMap((bundle) =>
+    bundle.configuredGates.gates.map((gate) => ({
+      projectId: bundle.project.id,
+      name: gate.name,
+      command: [gate.program, ...gate.args].join(' '),
+    })),
+  )
+  const gateConfigurationIssues = Object.fromEntries(
+    bundles
+      .filter((bundle) => Boolean(bundle.configuredGates.unavailableReason))
+      .map((bundle) => [bundle.project.id, bundle.configuredGates.unavailableReason as string]),
+  )
   const allReceipts = bundles.flatMap((bundle) => bundle.receipts)
   const taskById = new Map(allTasks.map((task) => [task.id, task]))
   const runById = new Map(allRuns.map((run) => [run.id, run]))
@@ -339,7 +368,15 @@ function mapSnapshot(
     const run = allRuns.find((candidate) => candidate.task_id === task.id)
     const profile = run?.agent_profile_id ? profileById.get(run.agent_profile_id) : undefined
     const taskGates = gatesByTask.get(task.id) ?? []
-    const passed = taskGates.filter((gate) => gate.status === 'passed' || gate.status === 'skipped').length
+    const configuredNames = configuredGates
+      .filter((gate) => gate.projectId === task.project_id)
+      .map((gate) => gate.name)
+    const latestByName = new Map<string, ApiGate>()
+    for (const gate of taskGates) latestByName.set(gate.name, gate)
+    const passed = configuredNames.filter((name) => {
+      const status = latestByName.get(name)?.status
+      return status === 'passed' || status === 'skipped'
+    }).length
     return {
       id: task.id,
       projectId: task.project_id,
@@ -348,11 +385,12 @@ function mapSnapshot(
       titleEn: task.title,
       workstream: workstream?.name ?? '未分配工作流',
       workstreamEn: workstream?.name ?? 'Unassigned workstream',
-      role: profile?.role ?? profile?.name ?? 'Coordinator',
+      role: profile?.role ?? profile?.name ?? 'unassigned',
       status: task.status,
       scope: task.write ? (task.path_scope.join(', ') || '—') : 'READ-ONLY',
-      gate: `${passed} / ${taskGates.length}`,
+      gate: `${passed} / ${configuredNames.length}`,
       dependencies: task.depends_on.map((id) => shortCode(id)),
+      write: task.write,
     }
   })
 
@@ -362,6 +400,7 @@ function mapSnapshot(
     const worktree = worktreeByRunId.get(run.id)
     return {
       id: run.id,
+      taskId: run.task_id,
       taskCode: task ? shortCode(task.id) : shortCode(run.task_id),
       taskTitle: task?.title ?? '未知任务',
       taskTitleEn: task?.title ?? 'Unknown task',
@@ -425,12 +464,22 @@ function mapSnapshot(
 
   const gates: GateResult[] = allGates.map((gate) => ({
     id: gate.id,
+    taskId: gate.task_id,
+    runId: gate.run_id,
     name: gate.name,
     nameEn: gate.name,
     status: gate.status === 'skipped' ? 'pending' : gate.status,
     duration: gateDuration(gate),
     command: gate.command ?? '—',
     evidence: gateEvidence(gate.result),
+  }))
+
+  const agentProfiles: AgentProfileSummary[] = profiles.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    role: profile.role,
+    runtime: profile.runtime,
+    sandboxMode: profile.config?.sandboxMode ?? 'read-only',
   }))
 
   const receipts: ReceiptSummary[] = allReceipts.map((receipt) => ({
@@ -451,9 +500,12 @@ function mapSnapshot(
     activeProjectId: projectSummaries[0]?.id ?? null,
     projects: projectSummaries,
     tasks,
+    agentProfiles,
     runs,
     approvals: approvalSummaries,
     gates,
+    configuredGates,
+    gateConfigurationIssues,
     events: [],
     receipts,
     runtime: {
@@ -570,6 +622,26 @@ export function createTask(input: {
   dependsOn: string[]
 }, csrfToken: string) {
   return mutate<{ id: string }>('/api/v1/tasks', csrfToken, input)
+}
+
+export function dispatchTask(taskId: string, agentProfileId: string, csrfToken: string) {
+  return mutate<{ run: { id: string }; dispatch: { id: string } }>('/api/v1/dispatches', csrfToken, {
+    taskId,
+    agentProfileId,
+  })
+}
+
+export function runConfiguredGate(
+  taskId: string,
+  runId: string,
+  gate: string,
+  csrfToken: string,
+) {
+  return mutate<{ gate: ApiGate; finalization: unknown }>('/api/v1/gates/run', csrfToken, {
+    taskId,
+    runId,
+    gate,
+  })
 }
 
 export function retryRun(id: string, csrfToken: string) {

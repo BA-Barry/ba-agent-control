@@ -229,6 +229,8 @@ struct AdapterArgs {
 #[derive(Debug, Subcommand)]
 enum AdapterCommand {
     List,
+    /// List durable Agent profiles available for dispatch.
+    Profiles,
     Probe {
         #[arg(default_value = "codex")]
         adapter: String,
@@ -303,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Approval(args) => app::approval(&paths, args.command, cli.json).await,
         Command::Gate(args) => app::gate(&paths, args.command, cli.json).await,
         Command::Receipt(args) => app::receipt(&paths, args.command, cli.json),
-        Command::Adapter(args) => app::adapter(args.command, cli.json).await,
+        Command::Adapter(args) => app::adapter(&paths, args.command, cli.json).await,
         Command::Migrate(args) => migration::run(&paths, args.command, cli.json),
         Command::Mcp => mcp_backend::serve(&paths).await,
     }
@@ -312,6 +314,18 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapter_profiles_is_a_supported_command() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from(["ba-agent-control", "adapter", "profiles"])?;
+        assert!(matches!(
+            cli.command,
+            Command::Adapter(AdapterArgs {
+                command: AdapterCommand::Profiles
+            })
+        ));
+        Ok(())
+    }
 
     #[test]
     fn task_add_accepts_dependency_milestone_and_write_scope_flags() -> anyhow::Result<()> {

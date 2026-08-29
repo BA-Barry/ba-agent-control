@@ -11,6 +11,10 @@ const routes = [
   { path: '/settings', zh: '设置与适配器', en: 'Settings and adapters' },
 ] as const
 
+const draftTaskId = '01DRAFTTASK0000000000000001'
+const reviewTaskId = '01REVIEWTASK000000000000001'
+const reviewRunId = '01REVIEWRUN0000000000000001'
+
 const settings = [
   { language: 'zh', theme: 'light', visualTheme: 'fieldbook' },
   { language: 'zh', theme: 'dark', visualTheme: 'fieldbook' },
@@ -106,7 +110,10 @@ async function mockLongRunApi(page: Page) {
       return
     }
     if (path === '/api/v1/agent-profiles') {
-      await json(route, [{ id: '01PROFILE', name: 'Implementer', role: 'Implementer', runtime: 'codex' }])
+      await json(route, [
+        { id: '01PROFILE', name: 'Implementer', role: 'Implementer', runtime: 'codex', config: { sandboxMode: 'workspace-write' } },
+        { id: '01REVIEWER', name: 'Reviewer', role: 'Reviewer', runtime: 'codex', config: { sandboxMode: 'read-only' } },
+      ])
       return
     }
     if (path === '/api/v1/approvals') {
@@ -146,6 +153,32 @@ async function mockLongRunApi(page: Page) {
         depends_on: [],
         created_at: now,
         updated_at: now,
+      }, {
+        id: draftTaskId,
+        project_id: projectId,
+        workstream_id: '01WORKSTREAM',
+        milestone_id: null,
+        title: '实现写入范围隔离',
+        description: '在独立 worktree 中实现改动',
+        status: 'draft',
+        write: true,
+        path_scope: ['apps/console/**'],
+        depends_on: [],
+        created_at: now,
+        updated_at: now,
+      }, {
+        id: reviewTaskId,
+        project_id: projectId,
+        workstream_id: '01WORKSTREAM',
+        milestone_id: null,
+        title: '执行质量门确认',
+        description: '运行项目配置的检查',
+        status: 'review',
+        write: false,
+        path_scope: [],
+        depends_on: [],
+        created_at: now,
+        updated_at: now,
       }])
       return
     }
@@ -163,6 +196,19 @@ async function mockLongRunApi(page: Page) {
         created_at: now,
         updated_at: now,
         event_sequence: 9_999_999,
+      }, {
+        id: reviewRunId,
+        task_id: reviewTaskId,
+        agent_profile_id: '01REVIEWER',
+        status: 'succeeded',
+        adapter: 'codex-app-server',
+        runtime_run_id: 'runtime-review',
+        runtime_thread_id: 'thread-review',
+        started_at: now,
+        finished_at: now,
+        created_at: now,
+        updated_at: now,
+        event_sequence: 12,
       }])
       return
     }
@@ -170,8 +216,27 @@ async function mockLongRunApi(page: Page) {
       await json(route, [{ id: '01WORKTREE', project_id: projectId, task_id: taskId, run_id: runId, path: `G:/worktrees/${longName}`, status: 'active' }])
       return
     }
+    if (path === '/api/v1/gates/configured') {
+      await json(route, {
+        projectId,
+        gates: [{ name: 'format', program: 'cargo', args: ['fmt', '--all', '--', '--check'] }],
+        unavailableReason: null,
+      })
+      return
+    }
     if (path === '/api/v1/gates' || path === '/api/v1/receipts') {
       await json(route, [])
+      return
+    }
+    if (path === '/api/v1/dispatches' && route.request().method() === 'POST') {
+      await json(route, { run: { id: '01DISPATCHRUN' }, dispatch: { id: '01DISPATCH' } }, 201)
+      return
+    }
+    if (path === '/api/v1/gates/run' && route.request().method() === 'POST') {
+      await json(route, {
+        gate: { id: '01GATE', task_id: reviewTaskId, run_id: reviewRunId, name: 'format', status: 'passed', command: 'cargo fmt --all -- --check', result: {}, created_at: now, completed_at: now },
+        finalization: null,
+      }, 201)
       return
     }
     await json(route, { error: { code: 'not_found', message: 'Unmocked endpoint' } }, 404)
@@ -297,6 +362,39 @@ test('a live task draft preserves milestone and dependency associations', async 
     dependsOn: ['01LONGTASK000000000000000001'],
   })
   await expect(page.getByRole('status').filter({ hasText: '任务草稿已创建' })).toBeVisible()
+  await expectNoA11yViolations(page)
+})
+
+test('a write task dispatch keeps role permissions explicit before launch', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/workflows')
+  const row = page.getByRole('row').filter({ hasText: '实现写入范围隔离' })
+  await row.getByRole('button', { name: '派发' }).click()
+  await expect(page.getByRole('heading', { name: /派发/ }).last()).toBeVisible()
+  const role = page.getByLabel('Agent 角色')
+  await expect(role).toHaveValue('01PROFILE')
+  await expect(role.locator('option')).toHaveCount(1)
+  await expect(page.getByText('写入范围：apps/console/**。将创建独立 worktree。')).toBeVisible()
+  const dispatchRequest = page.waitForRequest((candidate) => candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/dispatches')
+  await page.getByRole('button', { name: '确认派发' }).click()
+  expect((await dispatchRequest).postDataJSON()).toEqual({ taskId: draftTaskId, agentProfileId: '01PROFILE' })
+  await expect(page.getByRole('status').filter({ hasText: '任务已派发' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('a review task can run the configured project gate from the console', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/quality')
+  await expect(page.getByLabel('检查任务')).toHaveValue(reviewTaskId)
+  await expect(page.getByText('cargo fmt --all -- --check')).toBeVisible()
+  const gateRequest = page.waitForRequest((candidate) => candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/gates/run')
+  await page.getByRole('button', { name: '执行', exact: true }).click()
+  expect((await gateRequest).postDataJSON()).toEqual({ taskId: reviewTaskId, runId: reviewRunId, gate: 'format' })
+  await expect(page.getByRole('status').filter({ hasText: 'format 已完成' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })
 

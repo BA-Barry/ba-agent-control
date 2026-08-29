@@ -1,4 +1,4 @@
-import type { ApprovalSummary, ConsoleSnapshot, GateResult, ProjectSummary, RunEvent, RunSummary, TaskSummary } from '../types'
+import type { AgentProfileSummary, ApprovalSummary, ConfiguredGateSummary, ConsoleSnapshot, GateResult, ProjectSummary, RunEvent, RunSummary, TaskSummary } from '../types'
 
 export const projects: ProjectSummary[] = [
   {
@@ -59,6 +59,7 @@ export const tasks: TaskSummary[] = [
     scope: 'crates/ba-store/**',
     gate: '3 / 6',
     dependencies: [],
+    write: true,
   },
   {
     id: '01JBTASK000000000000000002',
@@ -70,9 +71,10 @@ export const tasks: TaskSummary[] = [
     workstreamEn: 'Codex runtime',
     role: 'Explorer',
     status: 'review',
-    scope: 'crates/ba-runtime/**',
+    scope: 'READ-ONLY',
     gate: '5 / 6',
     dependencies: ['CORE-014'],
+    write: false,
   },
   {
     id: '01JBTASK000000000000000003',
@@ -87,6 +89,7 @@ export const tasks: TaskSummary[] = [
     scope: 'apps/console/src/pages/run/**',
     gate: '2 / 6',
     dependencies: ['RUNTIME-009'],
+    write: true,
   },
   {
     id: '01JBTASK000000000000000004',
@@ -98,9 +101,10 @@ export const tasks: TaskSummary[] = [
     workstreamEn: 'Safety guardrails',
     role: 'Security Reviewer',
     status: 'blocked',
-    scope: 'crates/ba-git/**',
+    scope: 'READ-ONLY',
     gate: '1 / 6',
     dependencies: ['CORE-014'],
+    write: false,
   },
   {
     id: '01JBTASK000000000000000005',
@@ -112,15 +116,17 @@ export const tasks: TaskSummary[] = [
     workstreamEn: 'Release readiness',
     role: 'Docs Reviewer',
     status: 'ready',
-    scope: 'docs/**',
+    scope: 'READ-ONLY',
     gate: '0 / 6',
     dependencies: ['RUNTIME-009'],
+    write: false,
   },
 ]
 
 export const runs: RunSummary[] = [
   {
     id: '01JBRUN0000000000000000001',
+    taskId: tasks[0].id,
     taskCode: 'CORE-014',
     taskTitle: 'SQLite 迁移与完整性恢复',
     taskTitleEn: 'SQLite migration and integrity recovery',
@@ -134,6 +140,7 @@ export const runs: RunSummary[] = [
   },
   {
     id: '01JBRUN0000000000000000002',
+    taskId: tasks[1].id,
     taskCode: 'RUNTIME-009',
     taskTitle: 'App Server 能力握手',
     taskTitleEn: 'App Server capability handshake',
@@ -147,6 +154,7 @@ export const runs: RunSummary[] = [
   },
   {
     id: '01JBRUN0000000000000000003',
+    taskId: tasks[2].id,
     taskCode: 'UI-021',
     taskTitle: '运行详情事件视图',
     taskTitleEn: 'Run-detail event view',
@@ -160,6 +168,7 @@ export const runs: RunSummary[] = [
   },
   {
     id: '01JBRUN0000000000000000004',
+    taskId: tasks[3].id,
     taskCode: 'QA-011',
     taskTitle: '收据链前向验证',
     taskTitleEn: 'Forward receipt-chain verification',
@@ -199,12 +208,32 @@ export const approvals: ApprovalSummary[] = [
 ]
 
 export const gates: GateResult[] = [
-  { id: 'format', name: '格式检查', nameEn: 'Format check', status: 'passed', duration: '1.2s', command: 'cargo fmt --all -- --check', evidence: '0 files changed' },
-  { id: 'lint', name: 'Lint', nameEn: 'Lint', status: 'passed', duration: '18.4s', command: 'cargo clippy --workspace --all-targets', evidence: '0 warnings' },
-  { id: 'typecheck', name: '类型检查', nameEn: 'Type check', status: 'passed', duration: '7.8s', command: 'pnpm typecheck', evidence: '8 projects checked' },
-  { id: 'changed-tests', name: '变更范围测试', nameEn: 'Changed-scope tests', status: 'running', duration: '24.1s', command: 'cargo test -p ba-store', evidence: '42 / 57 tests' },
-  { id: 'secret-scan', name: '秘密扫描', nameEn: 'Secret scan', status: 'pending', duration: '—', command: 'gitleaks detect --no-git', evidence: 'waiting' },
-  { id: 'diff-review', name: 'Diff 审查', nameEn: 'Diff review', status: 'pending', duration: '—', command: 'ba-agent-control gate diff-review', evidence: 'waiting' },
+  { id: 'format', taskId: tasks[1].id, runId: runs[1].id, name: 'format', nameEn: 'Format', status: 'passed', duration: '1.2s', command: 'node scripts/quality-gate.mjs format', evidence: '0 files changed' },
+  { id: 'lint', taskId: tasks[1].id, runId: runs[1].id, name: 'lint', nameEn: 'Lint', status: 'passed', duration: '18.4s', command: 'node scripts/quality-gate.mjs lint', evidence: '0 warnings' },
+  { id: 'typecheck', taskId: tasks[1].id, runId: runs[1].id, name: 'typecheck', nameEn: 'Type check', status: 'passed', duration: '7.8s', command: 'node scripts/quality-gate.mjs typecheck', evidence: '8 projects checked' },
+  { id: 'changed-tests', taskId: tasks[1].id, runId: runs[1].id, name: 'changed_tests', nameEn: 'Changed tests', status: 'running', duration: '24.1s', command: 'node scripts/quality-gate.mjs changed-tests', evidence: '42 / 57 tests' },
+  { id: 'secret-scan', taskId: tasks[1].id, runId: runs[1].id, name: 'secret_scan', nameEn: 'Secret scan', status: 'pending', duration: '—', command: 'node scripts/quality-gate.mjs secret-scan', evidence: 'waiting' },
+  { id: 'diff-review', taskId: tasks[1].id, runId: runs[1].id, name: 'diff_review', nameEn: 'Diff review', status: 'pending', duration: '—', command: 'node scripts/quality-gate.mjs diff-review', evidence: 'waiting' },
+]
+
+export const agentProfiles: AgentProfileSummary[] = [
+  { id: 'profile-coordinator', name: 'Coordinator', role: 'coordinator', runtime: 'codex', sandboxMode: 'read-only' },
+  { id: 'profile-planner', name: 'Planner', role: 'planner', runtime: 'codex', sandboxMode: 'read-only' },
+  { id: 'profile-explorer', name: 'Explorer', role: 'explorer', runtime: 'codex', sandboxMode: 'read-only' },
+  { id: 'profile-implementer', name: 'Implementer', role: 'implementer', runtime: 'codex', sandboxMode: 'workspace-write' },
+  { id: 'profile-reviewer', name: 'Reviewer', role: 'reviewer', runtime: 'codex', sandboxMode: 'read-only' },
+  { id: 'profile-test-engineer', name: 'Test Engineer', role: 'test_engineer', runtime: 'codex', sandboxMode: 'workspace-write' },
+  { id: 'profile-security-reviewer', name: 'Security Reviewer', role: 'security_reviewer', runtime: 'codex', sandboxMode: 'read-only' },
+  { id: 'profile-docs-reviewer', name: 'Docs Reviewer', role: 'docs_reviewer', runtime: 'codex', sandboxMode: 'read-only' },
+]
+
+export const configuredGates: ConfiguredGateSummary[] = [
+  { projectId: projects[0].id, name: 'format', command: 'node scripts/quality-gate.mjs format' },
+  { projectId: projects[0].id, name: 'lint', command: 'node scripts/quality-gate.mjs lint' },
+  { projectId: projects[0].id, name: 'typecheck', command: 'node scripts/quality-gate.mjs typecheck' },
+  { projectId: projects[0].id, name: 'changed_tests', command: 'node scripts/quality-gate.mjs changed-tests' },
+  { projectId: projects[0].id, name: 'secret_scan', command: 'node scripts/quality-gate.mjs secret-scan' },
+  { projectId: projects[0].id, name: 'diff_review', command: 'node scripts/quality-gate.mjs diff-review' },
 ]
 
 export const events: RunEvent[] = [
@@ -223,9 +252,12 @@ export const demoSnapshot: ConsoleSnapshot = {
   activeProjectId: projects[0]?.id ?? null,
   projects,
   tasks,
+  agentProfiles,
   runs,
   approvals,
   gates,
+  configuredGates,
+  gateConfigurationIssues: {},
   events,
   receipts: [
     { id: '01JBRECEIPT00000000000001', kind: 'gate_passed', hash: '91d4a6c7e2b0', previousHash: '740ac824118e', createdAt: '2026-08-24T14:26:31Z' },
