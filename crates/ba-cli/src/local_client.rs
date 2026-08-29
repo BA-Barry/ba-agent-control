@@ -32,6 +32,48 @@ pub async fn post(paths: &DataPaths, route: &str, body: Value) -> anyhow::Result
     .await?
 }
 
+pub async fn get(paths: &DataPaths, route: &str) -> anyhow::Result<Value> {
+    let descriptor_path = paths.control.clone();
+    let route = route.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let source = std::fs::read_to_string(&descriptor_path).with_context(|| {
+            format!(
+                "BA Agent control service is not running; start `ba-agent-control ui` (missing {})",
+                descriptor_path.display()
+            )
+        })?;
+        let descriptor: ControlDescriptor = serde_json::from_str(&source)
+            .context("local control descriptor is invalid; restart `ba-agent-control ui`")?;
+        if !descriptor.address.ip().is_loopback()
+            || descriptor.origin != format!("http://{}", descriptor.address)
+        {
+            anyhow::bail!("refusing a non-loopback or mismatched control descriptor");
+        }
+        send_get(&descriptor, &route)
+    })
+    .await?
+}
+
+fn send_get(descriptor: &ControlDescriptor, route: &str) -> anyhow::Result<Value> {
+    if !route.starts_with('/') || route.contains(['\r', '\n']) {
+        anyhow::bail!("invalid local API route");
+    }
+    let mut stream = TcpStream::connect_timeout(&descriptor.address, Duration::from_secs(2))
+        .context("BA Agent control service is not reachable; restart `ba-agent-control ui`")?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    let request = format!(
+        "GET {route} HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nCookie: ba_session={session}\r\nConnection: close\r\n\r\n",
+        address = descriptor.address,
+        origin = descriptor.origin,
+        session = descriptor.session_token,
+    );
+    stream.write_all(request.as_bytes())?;
+    stream.flush()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    parse_response(&response)
+}
+
 fn send_post(descriptor: &ControlDescriptor, route: &str, body: &Value) -> anyhow::Result<Value> {
     if !route.starts_with('/') || route.contains(['\r', '\n']) {
         anyhow::bail!("invalid local API route");

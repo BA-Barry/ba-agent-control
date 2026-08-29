@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, retryRun, runConfiguredGate, subscribeRunEvents } from './console'
+import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -40,6 +40,11 @@ test('maps the authenticated local API into a live console snapshot', async () =
       app_server: true, exec_json_fallback: true, approvals: true, resume: true,
       guide: true, cancellation: true, degraded_reason: null,
     } }] })
+    if (url === '/api/v1/dispatches/queue') return json([])
+    if (url === '/api/v1/scheduler') return json({
+      globalMaxConcurrency: 4,
+      projects: [{ projectId: project.id, requestedMaxConcurrency: 3, effectiveMaxConcurrency: 3, cappedByGlobal: false }],
+    })
     if (url.startsWith('/api/v1/workstreams?')) return json([{ id: task.workstream_id, project_id: project.id, name: 'Console', description: '', status: 'active' }])
     if (url.startsWith('/api/v1/milestones?')) return json([{
       id: task.milestone_id, project_id: project.id, workstream_id: task.workstream_id,
@@ -79,6 +84,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
   })
   expect(snapshot.approvals[0]).toMatchObject({ action: 'push', risk: 'medium' })
   expect(snapshot.runtime).toMatchObject({ available: true, authenticated: true, version: '0.149.1', appServer: true })
+  expect(snapshot.scheduler).toMatchObject({ globalMaxConcurrency: 4 })
   expect(snapshot.metrics).toMatchObject({ pendingApprovals: 1, runningRuns: 1, receiptCount: 1, receiptHead: 'abcdef1234567890' })
 })
 
@@ -195,4 +201,20 @@ test('sends CSRF-protected creation, dispatch, gate, and retry mutations', async
     headers: expect.objectContaining({ 'x-ba-csrf-token': 'csrf-token' }),
   }))
   expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toMatchObject({ name: 'Local', rootPath: 'G:\\Local' })
+})
+
+test('sends durable queue and concurrency mutations through the protected API', async () => {
+  const fetchMock = vi.fn().mockImplementation(() => json({ ok: true }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await reorderDispatchQueue(['01DISPATCH1', '01DISPATCH2'], 'csrf-token')
+  await cancelDispatch('01DISPATCH2', 'csrf-token')
+  await setGlobalConcurrency(6, 'csrf-token')
+  await setProjectConcurrency('01PROJECT', 3, 'csrf-token')
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/dispatches/queue/reorder', expect.objectContaining({ method: 'POST' }))
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ dispatchIds: ['01DISPATCH1', '01DISPATCH2'] })
+  expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/dispatches/01DISPATCH2/cancel', expect.objectContaining({ method: 'POST' }))
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ maxConcurrency: 6 })
+  expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/scheduler/projects/01PROJECT', expect.objectContaining({ method: 'POST' }))
 })

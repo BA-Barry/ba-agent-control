@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use ba_core::{AgentProfile, Approval, EntityId, Run, RunEvent, RunStatus, Task, TaskStatus, now};
 use ba_runtime::{
@@ -7,9 +11,12 @@ use ba_runtime::{
 };
 use ba_store::{SqliteStore, TerminalRunUpdate};
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
-use crate::{ApprovalCoordinator, ApprovalResolution, DispatchBundle, SchedulerError};
+use crate::{
+    ApprovalCoordinator, ApprovalResolution, DispatchBundle, DispatchCoordinator, Scheduler,
+    SchedulerConfig, SchedulerError, SchedulerPolicyService,
+};
 
 /// Shared runtime lifecycle used by HTTP, MCP, and CLI control surfaces.
 #[derive(Clone, Debug)]
@@ -17,6 +24,8 @@ pub struct RuntimeCoordinator {
     store: SqliteStore,
     runtime: Arc<dyn RuntimeAdapter>,
     events: broadcast::Sender<RunEvent>,
+    worktree_root: Option<PathBuf>,
+    drain_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -42,7 +51,16 @@ impl RuntimeCoordinator {
             store,
             runtime,
             events,
+            worktree_root: None,
+            drain_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Enable durable queue draining and just-in-time worktree creation.
+    #[must_use]
+    pub fn with_queue(mut self, worktree_root: PathBuf) -> Self {
+        self.worktree_root = Some(worktree_root);
+        self
     }
 
     #[must_use]
@@ -74,6 +92,34 @@ impl RuntimeCoordinator {
     /// or the runtime launch fails.
     pub async fn launch(
         &self,
+        bundle: DispatchBundle,
+        prompt_override: Option<String>,
+    ) -> Result<DispatchBundle, SchedulerError> {
+        let claimed = if self.worktree_root.is_some() {
+            let task = self.store.get_task(&bundle.run.task_id)?.ok_or_else(|| {
+                SchedulerError::NotSchedulable("task disappeared before admission".into())
+            })?;
+            let project = self.store.get_project(&task.project_id)?.ok_or_else(|| {
+                SchedulerError::NotSchedulable("project disappeared before admission".into())
+            })?;
+            let policy = SchedulerPolicyService::new(self.store.clone());
+            let global = policy.global()?.global_max_concurrency;
+            let project = policy.project(&project)?.effective_max_concurrency;
+            self.claim_bundle_with_policy(bundle, global, project)?
+        } else {
+            self.claim_bundle(bundle, |_run, _task, _active_runs, _tasks| true)?
+        };
+        let bundle = claimed
+            .ok_or_else(|| SchedulerError::AlreadyActive("run was already claimed".into()))?;
+        self.launch_claimed(bundle, prompt_override).await
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "runtime launch keeps the claimed run, worktree, adapter, and event transition sequence visible in one lifecycle"
+    )]
+    async fn launch_claimed(
+        &self,
         mut bundle: DispatchBundle,
         prompt_override: Option<String>,
     ) -> Result<DispatchBundle, SchedulerError> {
@@ -90,6 +136,25 @@ impl RuntimeCoordinator {
             .map(|id| self.store.get_agent_profile(id))
             .transpose()?
             .flatten();
+        if bundle.worktree.is_none() {
+            if let Some(worktree_root) = &self.worktree_root {
+                bundle.worktree =
+                    match DispatchCoordinator::new(self.store.clone(), worktree_root.clone())
+                        .activate_worktree(&task, &bundle.run.id)
+                    {
+                        Ok(worktree) => worktree,
+                        Err(error) => {
+                            self.finish_run(
+                                &bundle.run.id,
+                                RunStatus::Failed,
+                                "worktree.create_failed",
+                                json!({"error": error.to_string()}),
+                            )?;
+                            return Err(error);
+                        }
+                    };
+            }
+        }
         let cwd = bundle.worktree.as_ref().map_or_else(
             || PathBuf::from(&project.root_path),
             |worktree| PathBuf::from(&worktree.path),
@@ -101,8 +166,6 @@ impl RuntimeCoordinator {
         let environment = managed_run_environment(&task)?;
         let mut runtime_events = self.runtime.subscribe();
 
-        self.store
-            .transition_run(&bundle.run.id, RunStatus::Starting)?;
         let launched = match self
             .runtime
             .launch(RunRequest {
@@ -167,6 +230,148 @@ impl RuntimeCoordinator {
                 .await;
         });
         Ok(bundle)
+    }
+
+    fn claim_bundle<F>(
+        &self,
+        mut bundle: DispatchBundle,
+        predicate: F,
+    ) -> Result<Option<DispatchBundle>, SchedulerError>
+    where
+        F: FnOnce(&Run, &Task, &[Run], &[Task]) -> bool,
+    {
+        let Some(run) = self.store.claim_queued_run_if(&bundle.run.id, predicate)? else {
+            return Ok(None);
+        };
+        bundle.run = run;
+        Ok(Some(bundle))
+    }
+
+    fn claim_bundle_with_policy(
+        &self,
+        bundle: DispatchBundle,
+        global_limit: usize,
+        project_limit: usize,
+    ) -> Result<Option<DispatchBundle>, SchedulerError> {
+        self.claim_bundle(bundle, move |_run, task, active_runs, tasks| {
+            if active_runs.len() >= global_limit {
+                return false;
+            }
+            let tasks_by_id = tasks
+                .iter()
+                .map(|item| (item.id.clone(), item))
+                .collect::<BTreeMap<_, _>>();
+            let project_active = active_runs
+                .iter()
+                .filter_map(|run| tasks_by_id.get(&run.task_id))
+                .filter(|active| active.project_id == task.project_id)
+                .count();
+            if project_active >= project_limit
+                || task.depends_on.iter().any(|dependency_id| {
+                    tasks_by_id
+                        .get(dependency_id)
+                        .is_none_or(|dependency| dependency.status != TaskStatus::Completed)
+                })
+            {
+                return false;
+            }
+            let Ok(mut scheduler) = Scheduler::new(SchedulerConfig {
+                max_concurrency: global_limit,
+            }) else {
+                return false;
+            };
+            let mut restored = BTreeSet::new();
+            for active_run in active_runs {
+                if !restored.insert(active_run.task_id.clone()) {
+                    continue;
+                }
+                let Some(active_task) = tasks_by_id.get(&active_run.task_id) else {
+                    return false;
+                };
+                if scheduler.restore(active_task).is_err() {
+                    return false;
+                }
+            }
+            let mut candidate = task.clone();
+            candidate.status = TaskStatus::Ready;
+            let project_tasks = tasks
+                .iter()
+                .filter(|item| item.project_id == task.project_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            scheduler.admit(&candidate, &project_tasks).is_ok()
+        })
+    }
+
+    /// Claim and start every queued dispatch currently allowed by durable policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when policy/configuration reads, SQLite claims, worktree
+    /// creation, or runtime launch coordination fail.
+    pub async fn drain_queue(&self) -> Result<Vec<DispatchBundle>, SchedulerError> {
+        if self.worktree_root.is_none() {
+            return Ok(Vec::new());
+        }
+        let _guard = self.drain_lock.lock().await;
+        let mut launched = Vec::new();
+        loop {
+            let policy = SchedulerPolicyService::new(self.store.clone()).global()?;
+            let mut active_runs = Vec::new();
+            for status in [
+                RunStatus::Starting,
+                RunStatus::Running,
+                RunStatus::WaitingApproval,
+                RunStatus::Orphaned,
+            ] {
+                active_runs.extend(self.store.list_runs_by_status(status)?);
+            }
+            if active_runs.len() >= policy.global_max_concurrency {
+                break;
+            }
+
+            let mut selected = None;
+            for dispatch in self.store.list_dispatches_by_status("queued")? {
+                let Some(run) = self.store.get_run(&dispatch.run_id)? else {
+                    continue;
+                };
+                if run.status != RunStatus::Queued {
+                    continue;
+                }
+                let Some(task) = self.store.get_task(&dispatch.task_id)? else {
+                    continue;
+                };
+                let Some(project) = self.store.get_project(&task.project_id)? else {
+                    continue;
+                };
+                let project_policy =
+                    SchedulerPolicyService::new(self.store.clone()).project(&project)?;
+                let bundle = DispatchBundle {
+                    dispatch,
+                    run,
+                    worktree: None,
+                };
+                if let Some(bundle) = self.claim_bundle_with_policy(
+                    bundle,
+                    policy.global_max_concurrency,
+                    project_policy.effective_max_concurrency,
+                )? {
+                    selected = Some(bundle);
+                    break;
+                }
+            }
+            let Some(bundle) = selected else {
+                break;
+            };
+            let prompt = bundle.dispatch.prompt.clone();
+            match self.launch_claimed(bundle, prompt).await {
+                Ok(bundle) => launched.push(bundle),
+                Err(error) => {
+                    tracing::error!(error = %error, "queued dispatch failed to launch");
+                }
+            }
+        }
+        Ok(launched)
     }
 
     /// Resume one orphaned domain run from its persisted Codex thread.
@@ -333,6 +538,19 @@ impl RuntimeCoordinator {
         run_id: &EntityId,
         actor: &str,
     ) -> Result<(Run, RunEvent), SchedulerError> {
+        let current = self
+            .store
+            .get_run(run_id)?
+            .ok_or_else(|| SchedulerError::NotActive(run_id.to_string()))?;
+        if current.status == RunStatus::Queued {
+            let update = self.finish_run(
+                run_id,
+                RunStatus::Cancelled,
+                "run.cancel_requested",
+                json!({"actor": actor, "queued": true}),
+            )?;
+            return Ok((update.run, update.event));
+        }
         let current = self.active_run(run_id)?;
         let runtime_run_id = current
             .runtime_run_id
@@ -492,6 +710,14 @@ impl RuntimeCoordinator {
             .store
             .finish_run(run_id, status, event_kind, event_payload)?;
         let _receiver_count = self.events.send(update.event.clone());
+        if self.worktree_root.is_some() {
+            let coordinator = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = coordinator.drain_queue().await {
+                    tracing::error!(error = %error, "durable queue drain failed");
+                }
+            });
+        }
         Ok(update)
     }
 }

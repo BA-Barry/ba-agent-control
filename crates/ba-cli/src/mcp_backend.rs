@@ -8,7 +8,7 @@ use ba_mcp::{ToolBackend, ToolError};
 use ba_runtime::{ApprovalDecision, CodexAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    RuntimeCoordinator, configured_gate,
+    RuntimeCoordinator, SchedulerPolicyService, configured_gate,
 };
 use ba_store::SqliteStore;
 use serde_json::{Value, json};
@@ -25,7 +25,8 @@ struct StoreBackend {
 pub async fn serve(paths: &DataPaths) -> anyhow::Result<()> {
     let store = paths.store()?;
     let backend = StoreBackend {
-        control: RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default())),
+        control: RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default()))
+            .with_queue(paths.worktrees.clone()),
         store,
         worktree_root: paths.worktrees.clone(),
     };
@@ -42,6 +43,10 @@ impl ToolBackend for StoreBackend {
 }
 
 impl StoreBackend {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the MCP name-to-domain router is clearer as one exhaustive match"
+    )]
     async fn call_inner(&self, tool: &str, arguments: &Value) -> anyhow::Result<Value> {
         match tool {
             "project.list" => Ok(serde_json::to_value(self.store.list_projects()?)?),
@@ -91,12 +96,20 @@ impl StoreBackend {
             "task.transition" => {
                 let id = required_id(arguments, "task_id")?;
                 let status = TaskStatus::from_str(required_string(arguments, "status")?)?;
-                Ok(serde_json::to_value(
-                    self.store.transition_task(&id, status)?,
-                )?)
+                let task = self.store.transition_task(&id, status)?;
+                if status == TaskStatus::Completed {
+                    self.control.drain_queue().await?;
+                }
+                Ok(serde_json::to_value(task)?)
             }
             "agent-profile.list" => Ok(serde_json::to_value(self.store.list_agent_profiles()?)?),
             "dispatch.create" => self.create_dispatch(arguments).await,
+            "dispatch.queue" | "dispatch.reorder" | "dispatch.cancel" => {
+                self.dispatch_queue_control(tool, arguments).await
+            }
+            "scheduler.get" | "scheduler.set" | "scheduler.project.set" => {
+                self.scheduler_control(tool, arguments).await
+            }
             "run.get" => {
                 let id = required_id(arguments, "run_id")?;
                 let run = self.store.get_run(&id)?.context("run not found")?;
@@ -264,9 +277,84 @@ impl StoreBackend {
         let task_id = required_id(arguments, "task_id")?;
         let profile_id = required_id(arguments, "agent_profile_id")?;
         let bundle = DispatchCoordinator::new(self.store.clone(), self.worktree_root.clone())
-            .enqueue(&task_id, Some(&profile_id))?;
-        let bundle = self.control.launch(bundle, None).await?;
-        Ok(serde_json::to_value(bundle)?)
+            .enqueue_with_prompt(
+                &task_id,
+                Some(&profile_id),
+                arguments
+                    .get("prompt")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )?;
+        self.control.drain_queue().await?;
+        let run = self
+            .store
+            .get_run(&bundle.run.id)?
+            .context("run not found")?;
+        let dispatch = self
+            .store
+            .get_dispatch(&bundle.dispatch.id)?
+            .context("dispatch not found")?;
+        Ok(json!({"run": run, "dispatch": dispatch}))
+    }
+
+    async fn dispatch_queue_control(&self, tool: &str, arguments: &Value) -> anyhow::Result<Value> {
+        match tool {
+            "dispatch.queue" => Ok(serde_json::to_value(
+                self.store.list_dispatches_by_status("queued")?,
+            )?),
+            "dispatch.reorder" => {
+                let ids = required_id_array(arguments, "dispatch_ids")?;
+                Ok(serde_json::to_value(
+                    self.store.reorder_queued_dispatches(&ids)?,
+                )?)
+            }
+            "dispatch.cancel" => {
+                let dispatch_id = required_id(arguments, "dispatch_id")?;
+                let dispatch = self
+                    .store
+                    .get_dispatch(&dispatch_id)?
+                    .context("dispatch not found")?;
+                let (run, event) = self.control.cancel(&dispatch.run_id, "mcp_user").await?;
+                Ok(json!({"dispatchId": dispatch.id, "run": run, "event": event}))
+            }
+            _ => anyhow::bail!("unsupported dispatch queue tool: {tool}"),
+        }
+    }
+
+    async fn scheduler_control(&self, tool: &str, arguments: &Value) -> anyhow::Result<Value> {
+        let service = SchedulerPolicyService::new(self.store.clone());
+        match tool {
+            "scheduler.get" => self.scheduler_policy(),
+            "scheduler.set" => {
+                service.set_global(required_usize(arguments, "max_concurrency")?)?;
+                self.control.drain_queue().await?;
+                self.scheduler_policy()
+            }
+            "scheduler.project.set" => {
+                let project_id = required_id(arguments, "project_id")?;
+                let project = self
+                    .store
+                    .get_project(&project_id)?
+                    .context("project not found")?;
+                let policy =
+                    service.set_project(&project, required_usize(arguments, "max_concurrency")?)?;
+                self.control.drain_queue().await?;
+                Ok(serde_json::to_value(policy)?)
+            }
+            _ => anyhow::bail!("unsupported scheduler tool: {tool}"),
+        }
+    }
+
+    fn scheduler_policy(&self) -> anyhow::Result<Value> {
+        let service = SchedulerPolicyService::new(self.store.clone());
+        let global = service.global()?;
+        let projects = self
+            .store
+            .list_projects()?
+            .iter()
+            .map(|project| service.project(project))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({"globalMaxConcurrency": global.global_max_concurrency, "projects": projects}))
     }
 
     async fn run_gate(&self, arguments: &Value) -> anyhow::Result<Value> {
@@ -310,6 +398,9 @@ impl StoreBackend {
                 self.control
                     .append_event(run_id, event, json!({"finalization": finalization}))?;
         }
+        if finalization.is_some() {
+            self.control.drain_queue().await?;
+        }
         Ok(json!({"gate": gate, "finalization": finalization}))
     }
 
@@ -352,6 +443,29 @@ fn required_string<'a>(arguments: &'a Value, key: &str) -> anyhow::Result<&'a st
 
 fn required_id(arguments: &Value, key: &str) -> anyhow::Result<EntityId> {
     EntityId::from_str(required_string(arguments, key)?).map_err(anyhow::Error::from)
+}
+
+fn required_id_array(arguments: &Value, key: &str) -> anyhow::Result<Vec<EntityId>> {
+    arguments
+        .get(key)
+        .and_then(Value::as_array)
+        .with_context(|| format!("missing or invalid array argument: {key}"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .with_context(|| format!("{key} entries must be strings"))
+                .and_then(|value| EntityId::from_str(value).map_err(anyhow::Error::from))
+        })
+        .collect()
+}
+
+fn required_usize(arguments: &Value, key: &str) -> anyhow::Result<usize> {
+    let value = arguments
+        .get(key)
+        .and_then(Value::as_u64)
+        .with_context(|| format!("missing or invalid integer argument: {key}"))?;
+    usize::try_from(value).with_context(|| format!("argument is too large: {key}"))
 }
 
 fn optional_id(arguments: &Value, key: &str) -> anyhow::Result<Option<EntityId>> {

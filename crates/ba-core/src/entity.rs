@@ -105,6 +105,12 @@ pub struct Dispatch {
     pub agent_profile_id: Option<EntityId>,
     #[serde(default = "default_queued")]
     pub status: String,
+    /// Stable user-controlled order in the global durable queue.
+    #[serde(default)]
+    pub queue_position: i64,
+    /// Optional prompt supplied by the dispatching control surface.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }

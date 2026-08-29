@@ -9,6 +9,7 @@ mod dispatch;
 mod finalize;
 mod gate;
 mod planner;
+mod policy;
 mod profiles;
 mod recovery;
 mod runtime_control;
@@ -21,7 +22,11 @@ pub use gate::{
     configured_gate_names, evaluate_required_gates,
 };
 pub use planner::{
-    DEFAULT_MAX_CONCURRENCY, DispatchPlan, Reservation, ScheduleBlocker, Scheduler, SchedulerConfig,
+    DEFAULT_MAX_CONCURRENCY, DispatchPlan, Reservation, ScheduleBlocker, Scheduler,
+    SchedulerConfig, queue_blockers_for,
+};
+pub use policy::{
+    MAX_CONCURRENCY_LIMIT, ProjectConcurrency, SchedulerPolicy, SchedulerPolicyService,
 };
 pub use profiles::ensure_builtin_agent_profiles;
 pub use recovery::{RecoveryAction, RecoveryCoordinator, RecoveryRecord};
@@ -33,6 +38,12 @@ use thiserror::Error;
 pub enum SchedulerError {
     #[error("scheduler concurrency must be greater than zero")]
     InvalidConcurrency,
+    #[error("scheduler concurrency must be between 1 and {maximum}")]
+    ConcurrencyOutOfRange { maximum: usize },
+    #[error("project concurrency {requested} exceeds global concurrency {global}")]
+    InvalidProjectConcurrency { requested: usize, global: usize },
+    #[error("invalid project scheduler configuration: {0}")]
+    InvalidProjectConfig(String),
     #[error("task is not schedulable: {0}")]
     NotSchedulable(String),
     #[error("task is already active: {0}")]

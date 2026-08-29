@@ -6,9 +6,9 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 1. Make roles usable from the console
 
-**Progress (2026-08-29):** partially complete. Dispatch now recommends one of the eight built-in profiles, lets the user make the final choice, filters write tasks to write-capable profiles, and exposes profiles through `adapter profiles`. Persisting an assignment before dispatch and adding the selector to task creation remain open.
+**Progress (2026-08-29):** partially complete. Dispatch now recommends one of the eight built-in profiles, lets the user make the final choice, filters write tasks to write-capable profiles, and exposes profiles through `adapter profiles`. Persisting an assignment before dispatch, displaying it consistently, and adding the selector to task creation remain open.
 
-**Current gap:** BA Agent persists eight built-in Agent profiles, but the task form does not let the user choose one, the console does not recommend a profile, and profile identifiers are not discoverable through the normal CLI. Dispatch without `--agent-profile-id` launches a generic Codex run.
+**Current gap:** the role is chosen at dispatch time rather than persisted as part of task planning, so task creation and pre-run views cannot show a durable assignment.
 
 **Target outcome:**
 
@@ -21,8 +21,6 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 **Progress (2026-08-29):** complete for the personal Alpha. Eligible task rows can open a role-aware dispatch panel, and the quality surface can execute or retry the selected project's configured gates with live feedback. Write-task gates now execute in the originating run worktree instead of the project checkout.
 
-**Current gap:** the console can create tasks and inspect runs, approvals, gates, and receipts, but starting a dispatch and running configured quality gates still require CLI commands. This makes the Alpha unnecessarily expensive to operate for non-CLI users.
-
 **Target outcome:**
 
 - Add `派发` / `Dispatch` to eligible task rows and task detail.
@@ -32,7 +30,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 3. Wire and expose concurrency policy
 
-**Current gap:** `.ba-agent/project.toml` declares `max_concurrency`, and the scheduler supports an override type, but the live dispatch path currently constructs the default four-run policy directly. Editing project configuration therefore does not change the effective limit.
+**Progress (2026-08-30):** complete. The live scheduler reads a SQLite-backed global maximum (default four), resolves each project's `.ba-agent/project.toml` maximum, applies the lower effective value, and exposes both through CLI, REST, MCP, and Settings. Atomic admission tests with independent SQLite connections prove two control processes cannot exceed the shared limit.
 
 **Target outcome:**
 
@@ -43,7 +41,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 4. Queue capacity overflow instead of rejecting it
 
-**Current gap:** when four runs are active, a fifth dispatch is rejected and must be manually retried. The Task state model already has `queued`, but there is no durable waiting queue for capacity overflow.
+**Progress (2026-08-30):** complete. Overflow work persists as ordered Dispatch/Run records, starts automatically when dependencies and capacity allow, creates write worktrees only after admission, and can be reordered or cancelled from CLI, REST, MCP, and the console. Terminal transitions, cancellations, dependency completion, and policy changes all refill available slots.
 
 **Target outcome:**
 

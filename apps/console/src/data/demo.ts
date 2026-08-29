@@ -253,6 +253,16 @@ export const demoSnapshot: ConsoleSnapshot = {
   projects,
   tasks,
   agentProfiles,
+  queue: [],
+  scheduler: {
+    globalMaxConcurrency: 4,
+    projects: projects.map((project) => ({
+      projectId: project.id,
+      requestedMaxConcurrency: 4,
+      effectiveMaxConcurrency: 4,
+      cappedByGlobal: false,
+    })),
+  },
   runs,
   approvals,
   gates,

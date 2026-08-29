@@ -18,4 +18,4 @@ This record preserves the release owner's manual acceptance performed on Windows
 
 ## Current delta
 
-Commit `36882b0` later added role-aware dispatch and configured quality-gate controls. Those controls pass desktop and Pixel 7 axe, keyboard-semantic, overflow, bilingual, theme, and interaction tests, but were not part of the 2026-08-29 manual Narrator pass. A future public release candidate should include a short manual confirmation of those two new panels before publication.
+Commit `36882b0` later added role-aware dispatch and configured quality-gate controls; the 2026-08-30 scheduler iteration also added durable-queue and concurrency-setting controls. These controls pass desktop and Pixel 7 axe, keyboard-semantic, overflow, bilingual, theme, and interaction tests, but were not part of the 2026-08-29 manual Narrator pass. A future public release candidate should include a short manual confirmation of these post-pass controls before publication.

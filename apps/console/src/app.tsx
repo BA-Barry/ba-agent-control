@@ -50,15 +50,19 @@ import {
 
 import {
   cancelRun,
+  cancelDispatch,
   createMilestone,
   createProject,
   createTask,
   dispatchTask,
   loadConsoleSnapshot,
   messageRun,
+  reorderDispatchQueue,
   respondApproval,
   retryRun,
   runConfiguredGate,
+  setGlobalConcurrency,
+  setProjectConcurrency,
   subscribeRunEvents,
   verifyReceipts,
   type EventStreamState,
@@ -626,6 +630,28 @@ function WorkflowsPage() {
   const [feedback, setFeedback] = useState('')
   const [dispatchTaskId, setDispatchTaskId] = useState('')
   const [profileId, setProfileId] = useState('')
+  const queueMutation = useMutation({
+    mutationFn: (dispatchIds: string[]) => {
+      if (!data.csrfToken) throw new Error('Live session is unavailable')
+      return reorderDispatchQueue(dispatchIds, data.csrfToken)
+    },
+    onSuccess: async () => {
+      setFeedback(text('排队顺序已更新。', 'Queue order updated.'))
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setFeedback(error instanceof Error ? error.message : text('队列重排失败。', 'Queue reorder failed.')),
+  })
+  const cancelQueuedMutation = useMutation({
+    mutationFn: (dispatchId: string) => {
+      if (!data.csrfToken) throw new Error('Live session is unavailable')
+      return cancelDispatch(dispatchId, data.csrfToken)
+    },
+    onSuccess: async () => {
+      setFeedback(text('排队任务已取消。', 'Queued dispatch cancelled.'))
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setFeedback(error instanceof Error ? error.message : text('取消排队任务失败。', 'Queued dispatch cancellation failed.')),
+  })
   const dispatchCandidate = data.tasks.find((task) => task.id === dispatchTaskId)
   const compatibleProfiles = dispatchCandidate?.write
     ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
@@ -727,6 +753,13 @@ function WorkflowsPage() {
   const downstreamTask = dependentTask
     ? data.tasks.find((task) => task.dependencies.includes(dependentTask.code))
     : undefined
+  const moveQueued = (index: number, offset: number) => {
+    const target = index + offset
+    if (target < 0 || target >= data.queue.length) return
+    const ids = data.queue.map((item) => item.dispatchId)
+    ;[ids[index], ids[target]] = [ids[target], ids[index]]
+    queueMutation.mutate(ids)
+  }
   const action = data.source === 'demo'
     ? <DemoActionButton primary labelZh="新建任务" labelEn="New task" messageZh="演示模式：任务创建向导尚未启动。" messageEn="Demo mode: the task-creation flow was not started." />
     : <button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => setFormOpen((value) => !value)}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button>
@@ -734,6 +767,7 @@ function WorkflowsPage() {
     {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW STATION</span><h3>{text('创建任务草稿', 'Create a task draft')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选新建）', 'New workstream name (optional)')}<input value={workstreamName} onChange={(event) => setWorkstreamName(event.target.value)} /></label><label className="wide-field">{text('前置任务（可多选）', 'Dependencies (multiple)')}<select multiple value={dependencyIds} onChange={(event) => setDependencyIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{data.tasks.filter((task) => task.projectId === projectId).map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)}</option>)}</select></label><label className="wide-field">{text('任务标题', 'Task title')}<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide-field">{text('说明与验收', 'Description and acceptance')}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="check-field"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} />{text('需要写入仓库', 'Writes to the repository')}</label>{write && <label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={scope} onChange={(event) => setScope(event.target.value)} placeholder="apps/console/**" /></label>}</div><footer><span>{text('任务先保存为草稿，派发前仍会执行依赖和范围检查。', 'Tasks start as drafts; dependency and scope checks still run before dispatch.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || (write && !scope.trim())}>{createMutation.isPending ? text('创建中…', 'Creating…') : text('创建草稿', 'Create draft')}</button></footer></form>}
     {dispatchCandidate && <form className="operation-panel dispatch-panel" onSubmit={(event) => { event.preventDefault(); dispatchMutation.mutate() }}><header><span className="measure-label">DISPATCH STATION</span><h3>{text(`派发 ${dispatchCandidate.code}`, `Dispatch ${dispatchCandidate.code}`)}</h3><p>{text(dispatchCandidate.title, dispatchCandidate.titleEn)}</p></header><div className="operation-fields"><label>{text('Agent 角色', 'Agent role')}<select required value={profileId} onChange={(event) => setProfileId(event.target.value)}>{compatibleProfiles.map((profile) => { const copy = profileCopy(profile); return <option key={profile.id} value={profile.id}>{text(copy.zh, copy.en)} · {profile.sandboxMode === 'workspace-write' ? text('可写', 'write') : text('只读', 'read-only')}</option> })}</select></label><div className="role-brief wide-field" aria-live="polite">{(() => { const profile = compatibleProfiles.find((item) => item.id === profileId); if (!profile) return <p>{text('没有与该任务权限匹配的角色。', 'No role matches this task permission.')}</p>; const copy = profileCopy(profile); return <><strong>{text(copy.zh, copy.en)}</strong><p>{text(copy.detailZh, copy.detailEn)}</p></> })()}</div></div><footer><span>{dispatchCandidate.write ? text(`写入范围：${dispatchCandidate.scope}。将创建独立 worktree。`, `Write scope: ${dispatchCandidate.scope}. A separate worktree will be created.`) : text('只读任务不会创建 worktree，也不得修改仓库文件。', 'Read-only work will not create a worktree and must not modify repository files.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={dispatchMutation.isPending} onClick={() => setDispatchTaskId('')}>{text('取消', 'Cancel')}</button><button className="field-action primary" type="submit" disabled={dispatchMutation.isPending || !profileId}>{dispatchMutation.isPending ? text('派发中…', 'Dispatching…') : text('确认派发', 'Confirm dispatch')}</button></div></footer></form>}
     {feedback && <p className={clsx('operation-feedback', (createMutation.isError || dispatchMutation.isError) && 'is-error')} role="status">{feedback}</p>}
+    {data.queue.length > 0 && <section className="queue-register" aria-label={text('全局派发队列', 'Global dispatch queue')}><header><div><span className="measure-label">GLOBAL QUEUE</span><h3>{text('等待启动', 'Waiting to start')}</h3></div><span className="mono">{data.queue.length} {text('项', 'items')} · {text(`全局上限 ${data.scheduler.globalMaxConcurrency}`, `global limit ${data.scheduler.globalMaxConcurrency}`)}</span></header>{data.queue.map((item, index) => <article key={item.dispatchId}><b className="mono">Q-{String(index + 1).padStart(2, '0')}</b><div><strong>{item.taskCode} · {text(item.title, item.titleEn)}</strong><small>{item.dependencies.length > 0 ? text(`等待依赖：${item.dependencies.join(', ')}`, `Dependencies: ${item.dependencies.join(', ')}`) : item.write ? text('等待并发名额或写入范围释放', 'Waiting for capacity or write scope') : text('等待全局并发名额', 'Waiting for global capacity')}</small></div><div className="queue-actions"><button type="button" aria-label={text(`上移 ${item.taskCode}`, `Move ${item.taskCode} up`)} disabled={index === 0 || queueMutation.isPending} onClick={() => moveQueued(index, -1)}>↑</button><button type="button" aria-label={text(`下移 ${item.taskCode}`, `Move ${item.taskCode} down`)} disabled={index === data.queue.length - 1 || queueMutation.isPending} onClick={() => moveQueued(index, 1)}>↓</button><button type="button" className="queue-cancel" disabled={cancelQueuedMutation.isPending} onClick={() => cancelQueuedMutation.mutate(item.dispatchId)}>{text('取消', 'Cancel')}</button></div></article>)}</section>}
     {data.tasks.length === 0 ? <EmptyRegister titleZh="尚无任务导线" titleEn="No task traverse yet" detailZh="创建工作流和任务后，依赖、范围、角色与质量门会显示在这里。" detailEn="Create a workstream and tasks to show dependencies, scopes, roles, and gates here." /> : <><div className="table-frame" tabIndex={0} role="region" aria-label={text('任务登记表', 'Task register table')}><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
     {dependentTask && <section className="dependency-strip"><div><span className="measure-label">DEPENDENCY</span><strong>{dependentTask.dependencies[0]}</strong></div><i /><div><span className="measure-label">UNLOCKS</span><strong>{dependentTask.code}</strong></div><i /><div><span className="measure-label">UNLOCKS</span><strong>{downstreamTask?.code ?? '—'}</strong></div><p>{text('写入范围存在交集时默认串行；调度器会隔离独立 worktree。', 'Overlapping write scopes serialize by default; the scheduler isolates independent worktrees.')}</p></section>}</>}
   </section>
@@ -958,6 +992,32 @@ function SettingsPage() {
   const { language, setLanguage, theme, setTheme, visualTheme, setVisualTheme } = useUiSettings()
   const { data } = useConsoleSnapshot()
   const runtime = data.runtime
+  const queryCache = useQueryClient()
+  const [globalMaximum, setGlobalMaximum] = useState(data.scheduler.globalMaxConcurrency)
+  const [schedulerFeedback, setSchedulerFeedback] = useState('')
+  useEffect(() => setGlobalMaximum(data.scheduler.globalMaxConcurrency), [data.scheduler.globalMaxConcurrency])
+  const globalMutation = useMutation({
+    mutationFn: () => {
+      if (!data.csrfToken) throw new Error('Live session is unavailable')
+      return setGlobalConcurrency(globalMaximum, data.csrfToken)
+    },
+    onSuccess: async () => {
+      setSchedulerFeedback(text('全局并发上限已更新。', 'Global concurrency limit updated.'))
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setSchedulerFeedback(error instanceof Error ? error.message : text('并发设置失败。', 'Concurrency update failed.')),
+  })
+  const projectMutation = useMutation({
+    mutationFn: ({ projectId, maximum }: { projectId: string; maximum: number }) => {
+      if (!data.csrfToken) throw new Error('Live session is unavailable')
+      return setProjectConcurrency(projectId, maximum, data.csrfToken)
+    },
+    onSuccess: async () => {
+      setSchedulerFeedback(text('项目并发上限已更新。', 'Project concurrency limit updated.'))
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setSchedulerFeedback(error instanceof Error ? error.message : text('项目并发设置失败。', 'Project concurrency update failed.')),
+  })
   const appServerReady = data.source === 'live' && runtime.available && runtime.appServer
   const fallbackActive = data.source === 'live' && runtime.available && !runtime.appServer && runtime.execJsonFallback
   const codexStatus = data.source !== 'live'
@@ -981,6 +1041,7 @@ function SettingsPage() {
   return <section className="register-page"><PageHeader titleZh="设置与适配器" titleEn="Settings and adapters" descriptionZh="完全本地、默认无遥测；运行时能力差异明确显示，不保存模型凭据。" descriptionEn="Local-only with no default telemetry; runtime capability differences stay visible and model credentials are not stored." />
     <div className="settings-layout"><fieldset><legend>{text('界面', 'Interface')}</legend><label>{text('语言', 'Language')}<select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="zh">中文</option><option value="en">English</option></select></label><label>{text('明暗模式', 'Appearance')}<select value={theme} onChange={(event) => setTheme(event.target.value as ThemePreference)}><option value="system">{text('跟随系统', 'System')}</option><option value="light">{text('浅色', 'Light')}</option><option value="dark">{text('深色', 'Dark')}</option></select></label><label>{text('界面主题', 'Interface theme')}<select value={visualTheme} onChange={(event) => setVisualTheme(event.target.value as VisualTheme)}><option value="fieldbook">{text('外业簿', 'Field book')}</option><option value="chartroom">{text('航图台', 'Chart room')}</option><option value="signalroom">{text('信号台', 'Signal room')}</option></select></label><label>{text('详细日志保留', 'Detailed log retention')}<select defaultValue="90"><option value="30">30 {text('天', 'days')}</option><option value="90">90 {text('天', 'days')}</option><option value="180">180 {text('天', 'days')}</option></select></label></fieldset>
       <section className="adapter-register"><header><h3>{text('运行时适配器', 'Runtime adapters')}</h3><span className="mono">CODEX {runtime.version ?? '≥ 0.130.0'}</span></header><article><span className="adapter-mark">{appServerReady ? <CheckCircle /> : <WarningCircle />}</span><div><strong>Codex App Server</strong><p>{text('实时线程、工具、审批、事件与恢复。', 'Live threads, tools, approvals, events, and recovery.')}</p>{runtime.degradedReason && <p title={runtime.degradedReason}>{!runtime.version ? text('请先安装受支持的 Codex CLI。', 'Install a supported Codex CLI first.') : !runtime.authenticated ? text('Codex CLI 尚未登录；请在终端运行 codex login。', 'Codex CLI is not signed in; run codex login in a terminal.') : text('App Server 当前不可用，已保留稳定降级路径。', 'App Server is unavailable; the stable fallback remains available.')}</p>}</div><span className={clsx('status-text', appServerReady ? 'status-completed' : 'status-review')}><i />{codexStatus}</span></article><article><span className="adapter-mark">{fallbackActive ? <CheckCircle /> : <WarningCircle />}</span><div><strong>codex exec --json</strong><p>{text('协议不兼容时自动降级；实时审批能力受限。', 'Automatic protocol fallback with limited live approvals.')}</p></div><span className={clsx('status-text', fallbackActive ? 'status-completed' : 'status-review')}><i />{fallbackStatus}</span></article><article><span className="adapter-mark"><Code /></span><div><strong>Claude compatibility</strong><p>{text('仅配置生成、兼容报告与状态导入。', 'Configuration generation, compatibility reports, and state import only.')}</p></div><span className="status-text status-ready"><i />ALPHA</span></article></section>
+      <section className="scheduler-register"><header><div><span className="measure-label">SCHEDULER</span><h3>{text('并发与队列', 'Concurrency and queue')}</h3></div><span className="mono">{data.queue.length} QUEUED</span></header><form onSubmit={(event) => { event.preventDefault(); globalMutation.mutate() }}><label>{text('全局共享上限', 'Global shared limit')}<input type="number" min="1" max="64" value={globalMaximum} onChange={(event) => setGlobalMaximum(Number(event.target.value))} /></label><button className="field-action compact" type="submit" disabled={globalMutation.isPending || data.source !== 'live'}>{text('应用', 'Apply')}</button></form><p>{text('所有项目共享此名额；降低上限不会中断已经运行的任务。', 'All projects share this pool; lowering the limit does not interrupt active runs.')}</p><div className="project-limits">{data.projects.map((project) => { const policy = data.scheduler.projects.find((item) => item.projectId === project.id); const value = policy?.requestedMaxConcurrency ?? Math.min(4, data.scheduler.globalMaxConcurrency); return <label key={project.id}><span><strong>{project.name}</strong><small>{policy?.cappedByGlobal ? text(`请求 ${value}，实际 ${policy.effectiveMaxConcurrency}`, `requested ${value}, effective ${policy.effectiveMaxConcurrency}`) : text(`实际 ${policy?.effectiveMaxConcurrency ?? value}`, `effective ${policy?.effectiveMaxConcurrency ?? value}`)}</small></span><select value={value} disabled={projectMutation.isPending || data.source !== 'live'} onChange={(event) => projectMutation.mutate({ projectId: project.id, maximum: Number(event.target.value) })}>{Array.from({ length: Math.max(1, data.scheduler.globalMaxConcurrency, value) }, (_, index) => index + 1).map((maximum) => <option key={maximum} value={maximum} disabled={maximum > data.scheduler.globalMaxConcurrency}>{maximum}</option>)}</select></label> })}</div>{schedulerFeedback && <p className={clsx('operation-feedback', (globalMutation.isError || projectMutation.isError) && 'is-error')} role="status">{schedulerFeedback}</p>}</section>
       <section className="privacy-register"><h3>{text('本地边界', 'Local boundary')}</h3><p>{text('服务仅绑定 127.0.0.1。不会存储 Codex 或 Claude 模型凭据，也不会自动同步到云端。', 'The service binds only to 127.0.0.1. It stores no Codex or Claude model credentials and performs no automatic cloud sync.')}</p><dl><div><dt>{text('遥测', 'Telemetry')}</dt><dd>{text('关闭', 'Off')}</dd></div><div><dt>{text('会话令牌', 'Session token')}</dt><dd>{text('每次启动随机生成', 'Random per launch')}</dd></div><div><dt>{text('数据库', 'Database')}</dt><dd>SQLite WAL · {text('完整性正常', 'Integrity healthy')}</dd></div></dl></section></div>
   </section>
 }

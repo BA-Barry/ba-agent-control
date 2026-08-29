@@ -58,6 +58,31 @@ export interface AgentProfileSummary {
   sandboxMode: 'read-only' | 'workspace-write' | string
 }
 
+export interface QueueSummary {
+  dispatchId: string
+  runId: string
+  taskId: string
+  projectId: string
+  taskCode: string
+  title: string
+  titleEn: string
+  position: number
+  write: boolean
+  dependencies: string[]
+}
+
+export interface ProjectConcurrencySummary {
+  projectId: string
+  requestedMaxConcurrency: number
+  effectiveMaxConcurrency: number
+  cappedByGlobal: boolean
+}
+
+export interface SchedulerPolicySummary {
+  globalMaxConcurrency: number
+  projects: ProjectConcurrencySummary[]
+}
+
 export interface RunSummary {
   id: string
   taskId: string
@@ -152,6 +177,8 @@ export interface ConsoleSnapshot {
   projects: ProjectSummary[]
   tasks: TaskSummary[]
   agentProfiles: AgentProfileSummary[]
+  queue: QueueSummary[]
+  scheduler: SchedulerPolicySummary
   runs: RunSummary[]
   approvals: ApprovalSummary[]
   gates: GateResult[]

@@ -20,18 +20,31 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Initialize `.ba-agent/` and register a Git project.
     Init(InitArgs),
+    /// Check the database, local service, Git, Codex, Claude, and GitHub adapters.
     Doctor,
+    /// Start or reopen the authenticated local console.
     Ui(UiArgs),
+    /// Register and inspect local projects.
     Project(ProjectArgs),
+    /// Create and inspect project workstreams.
     Workstream(WorkstreamArgs),
+    /// Create, list, and transition tasks.
     Task(TaskArgs),
+    /// Inspect and control runtime runs and events.
     Run(RunArgs),
+    /// Dispatch tasks and manage the durable run queue and concurrency policy.
     Dispatch(DispatchArgs),
+    /// Inspect and respond to protected-operation approvals.
     Approval(ApprovalArgs),
+    /// Inspect and execute configured quality gates.
     Gate(GateArgs),
+    /// List and verify permanent receipt chains.
     Receipt(ReceiptArgs),
+    /// Inspect runtime, Agent profile, GitHub, and compatibility adapters.
     Adapter(AdapterArgs),
+    /// Generate/import compatible configuration and evidence with dry-run defaults.
     Migrate(MigrateArgs),
     #[command(hide = true)]
     Mcp,
@@ -61,15 +74,16 @@ struct ProjectArgs {
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
+    /// Register an existing local Git repository.
     Add {
         path: PathBuf,
         #[arg(long)]
         name: Option<String>,
     },
+    /// List registered projects.
     List,
-    Show {
-        id: String,
-    },
+    /// Show one project by ULID.
+    Show { id: String },
 }
 
 #[derive(Debug, Args)]
@@ -80,15 +94,15 @@ struct WorkstreamArgs {
 
 #[derive(Debug, Subcommand)]
 enum WorkstreamCommand {
+    /// Add a workstream to a project.
     Add {
         project_id: String,
         name: String,
         #[arg(long, default_value = "")]
         description: String,
     },
-    List {
-        project_id: String,
-    },
+    /// List a project's workstreams.
+    List { project_id: String },
 }
 
 #[derive(Debug, Args)]
@@ -99,6 +113,7 @@ struct TaskArgs {
 
 #[derive(Debug, Subcommand)]
 enum TaskCommand {
+    /// Create a task; write tasks require at least one repository-relative scope.
     Add {
         project_id: String,
         title: String,
@@ -115,13 +130,10 @@ enum TaskCommand {
         #[arg(long = "scope")]
         path_scope: Vec<String>,
     },
-    List {
-        project_id: String,
-    },
-    Status {
-        id: String,
-        status: String,
-    },
+    /// List a project's tasks.
+    List { project_id: String },
+    /// Transition a task through its validated lifecycle.
+    Status { id: String, status: String },
 }
 
 #[derive(Debug, Args)]
@@ -132,30 +144,46 @@ struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 enum RunCommand {
+    /// List runs for exactly one task or project.
     List {
         #[arg(long)]
         task_id: Option<String>,
         #[arg(long)]
         project_id: Option<String>,
     },
-    Show {
-        id: String,
-    },
+    /// Show one run.
+    Show { id: String },
+    /// Read ordered events for one run.
     Events {
         id: String,
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
-    Cancel {
-        id: String,
-    },
+    /// Cancel a running or waiting run.
+    Cancel { id: String },
 }
 
 #[derive(Debug, Args)]
 struct DispatchArgs {
-    task_id: String,
+    #[command(subcommand)]
+    command: Option<DispatchCommand>,
+    task_id: Option<String>,
     #[arg(long)]
     agent_profile_id: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum DispatchCommand {
+    /// List dispatches durably waiting for admission.
+    Queue,
+    /// Replace the exact waiting order with the supplied dispatch ULIDs.
+    Reorder { dispatch_ids: Vec<String> },
+    /// Cancel one queued dispatch.
+    Cancel { id: String },
+    /// Set the shared global maximum (1–64, default 4).
+    Global { maximum: usize },
+    /// Set a project's maximum; it cannot exceed the current global maximum.
+    ProjectLimit { project_id: String, maximum: usize },
 }
 
 #[derive(Debug, Args)]
@@ -173,7 +201,9 @@ enum ApprovalDecision {
 
 #[derive(Debug, Subcommand)]
 enum ApprovalCommand {
+    /// List pending approvals.
     List,
+    /// Approve, reject, or cancel a pending approval.
     Respond {
         id: String,
         decision: ApprovalDecision,
@@ -190,9 +220,9 @@ struct GateArgs {
 
 #[derive(Debug, Subcommand)]
 enum GateCommand {
-    List {
-        task_id: String,
-    },
+    /// List quality gates configured for a task's project.
+    List { task_id: String },
+    /// Run one configured gate with its exact program and argument vector.
     Run {
         task_id: String,
         name: String,
@@ -216,7 +246,9 @@ struct ReceiptArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReceiptCommand {
+    /// List permanent receipts for a project.
     List { project_id: String },
+    /// Verify a project's complete forward hash chain.
     Verify { project_id: String },
 }
 
@@ -291,17 +323,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Ui(args) => app::ui(&paths, args.port, args.no_open).await,
         Command::Project(args) => app::project(&paths, args.command, cli.json),
         Command::Workstream(args) => app::workstream(&paths, args.command, cli.json),
-        Command::Task(args) => app::task(&paths, args.command, cli.json),
+        Command::Task(args) => app::task(&paths, args.command, cli.json).await,
         Command::Run(args) => app::run(&paths, args.command, cli.json).await,
-        Command::Dispatch(args) => {
-            app::dispatch(
-                &paths,
-                &args.task_id,
-                args.agent_profile_id.as_deref(),
-                cli.json,
-            )
-            .await
-        }
+        Command::Dispatch(args) => app::dispatch(&paths, args, cli.json).await,
         Command::Approval(args) => app::approval(&paths, args.command, cli.json).await,
         Command::Gate(args) => app::gate(&paths, args.command, cli.json).await,
         Command::Receipt(args) => app::receipt(&paths, args.command, cli.json),
@@ -368,6 +392,33 @@ mod tests {
         assert_eq!(depends_on, [dependency_id]);
         assert!(write);
         assert_eq!(path_scope, ["apps/console/**"]);
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_keeps_positional_compatibility_and_adds_queue_controls() -> anyhow::Result<()> {
+        let task_id = "01K00000000000000000000000";
+        let direct = Cli::try_parse_from(["ba-agent-control", "dispatch", task_id])?;
+        assert!(matches!(
+            direct.command,
+            Command::Dispatch(DispatchArgs { command: None, task_id: Some(id), .. }) if id == task_id
+        ));
+        let queued = Cli::try_parse_from(["ba-agent-control", "dispatch", "queue"])?;
+        assert!(matches!(
+            queued.command,
+            Command::Dispatch(DispatchArgs {
+                command: Some(DispatchCommand::Queue),
+                ..
+            })
+        ));
+        let limit = Cli::try_parse_from(["ba-agent-control", "dispatch", "global", "6"])?;
+        assert!(matches!(
+            limit.command,
+            Command::Dispatch(DispatchArgs {
+                command: Some(DispatchCommand::Global { maximum: 6 }),
+                ..
+            })
+        ));
         Ok(())
     }
 }

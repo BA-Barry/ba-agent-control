@@ -143,7 +143,7 @@ fn open_temp() -> Result<(TempDir, SqliteStore), Box<dyn std::error::Error>> {
 #[test]
 fn migrates_and_round_trips_entities() -> Result<(), Box<dyn std::error::Error>> {
     let (_temp, store) = open_temp()?;
-    assert_eq!(store.schema_version()?, 1);
+    assert_eq!(store.schema_version()?, 2);
     let project = project();
     let task = task(project.id.clone());
     store.upsert_project(&project)?;
@@ -256,6 +256,8 @@ fn terminal_run_update_is_atomic_across_task_dispatch_and_event()
         run_id: run.id.clone(),
         agent_profile_id: None,
         status: "running".into(),
+        queue_position: 0,
+        prompt: None,
         created_at: stamp,
         updated_at: stamp,
     };
@@ -275,6 +277,60 @@ fn terminal_run_update_is_atomic_across_task_dispatch_and_event()
     assert_eq!(update.dispatches[0].status, "succeeded");
     assert_eq!(update.event.sequence, 1);
     assert_eq!(store.list_dispatches(&run.id)?[0].status, "succeeded");
+    Ok(())
+}
+
+#[test]
+fn queued_dispatch_order_is_durable_and_rejects_stale_reorders()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp, store) = open_temp()?;
+    let project = project();
+    store.upsert_project(&project)?;
+    let mut dispatches = Vec::new();
+    for position in 1..=3 {
+        let mut task = task(project.id.clone());
+        task.status = TaskStatus::Queued;
+        store.upsert_task(&task)?;
+        let run = run(task.id.clone());
+        store.upsert_run(&run)?;
+        let stamp = now();
+        let dispatch = Dispatch {
+            id: EntityId::new(),
+            task_id: task.id,
+            run_id: run.id,
+            agent_profile_id: None,
+            status: "queued".into(),
+            queue_position: position,
+            prompt: None,
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_dispatch(&dispatch)?;
+        dispatches.push(dispatch);
+    }
+    let reversed = dispatches
+        .iter()
+        .rev()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    let reordered = store.reorder_queued_dispatches(&reversed)?;
+    assert_eq!(
+        reordered.iter().map(|item| &item.id).collect::<Vec<_>>(),
+        reversed.iter().collect::<Vec<_>>()
+    );
+    let reopened = SqliteStore::open(store.path())?;
+    assert_eq!(
+        reopened
+            .list_dispatches_by_status("queued")?
+            .iter()
+            .map(|item| &item.id)
+            .collect::<Vec<_>>(),
+        reversed.iter().collect::<Vec<_>>(),
+    );
+    assert!(matches!(
+        reopened.reorder_queued_dispatches(&reversed[..2]),
+        Err(StoreError::InvalidQueueOrder)
+    ));
     Ok(())
 }
 

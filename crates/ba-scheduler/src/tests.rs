@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
 };
 
 use ba_core::{
@@ -9,16 +10,87 @@ use ba_core::{
     TaskStatus, Workstream, now,
 };
 use ba_git::GitOperation;
-use ba_runtime::{CodexVersion, MINIMUM_CODEX_VERSION, RuntimeCapabilities};
+use ba_runtime::{
+    ApprovalDecision, CodexVersion, MINIMUM_CODEX_VERSION, ResumeRequest, RunRequest,
+    RuntimeAdapter, RuntimeCapabilities, RuntimeError, RuntimeEvent, RuntimeRunHandle,
+    RuntimeTransport,
+};
 use ba_store::SqliteStore;
 use serde_json::json;
 
 use crate::{
     ApprovalCoordinator, ApprovalResolution, DispatchCoordinator, FinalizationCoordinator,
     GateCoordinator, GateDefinition, GateEligibility, GateRunner, RecoveryAction,
-    RecoveryCoordinator, ScheduleBlocker, Scheduler, SchedulerConfig, configured_gate,
-    configured_gate_names, ensure_builtin_agent_profiles, evaluate_required_gates,
+    RecoveryCoordinator, RuntimeCoordinator, ScheduleBlocker, Scheduler, SchedulerConfig,
+    SchedulerPolicyService, configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
+    evaluate_required_gates,
 };
+
+#[derive(Debug)]
+struct HoldingRuntime {
+    events: tokio::sync::broadcast::Sender<RuntimeEvent>,
+    launches: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl HoldingRuntime {
+    fn new() -> Self {
+        let (events, _receiver) = tokio::sync::broadcast::channel(32);
+        Self {
+            events,
+            launches: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeAdapter for HoldingRuntime {
+    async fn probe(&self) -> Result<RuntimeCapabilities, RuntimeError> {
+        Ok(capabilities(true))
+    }
+
+    async fn launch(&self, request: RunRequest) -> Result<RuntimeRunHandle, RuntimeError> {
+        let mut launches = self
+            .launches
+            .lock()
+            .map_err(|_| RuntimeError::Protocol("launch log poisoned".into()))?;
+        let run_id = format!("holding-{}", launches.len() + 1);
+        launches.push((run_id.clone(), request.prompt));
+        Ok(RuntimeRunHandle {
+            run_id,
+            runtime_thread_id: None,
+            transport: RuntimeTransport::AppServer,
+            degraded_reason: None,
+        })
+    }
+
+    async fn resume(&self, request: ResumeRequest) -> Result<RuntimeRunHandle, RuntimeError> {
+        self.launch(RunRequest {
+            prompt: request.prompt,
+            cwd: request.cwd,
+            sandbox: request.sandbox,
+            environment: request.environment,
+        })
+        .await
+    }
+
+    async fn guide(&self, _run_id: &str, _prompt: String) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    async fn cancel(&self, _run_id: &str) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<RuntimeEvent> {
+        self.events.subscribe()
+    }
+    async fn respond_approval(
+        &self,
+        _run_id: &str,
+        _request_id: &str,
+        _decision: ApprovalDecision,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
 
 fn task(project_id: &EntityId, title: &str, write: bool, paths: &[&str]) -> Task {
     let timestamp = now();
@@ -222,6 +294,171 @@ fn dispatch_coordinator_persists_a_queued_run_and_event() -> Result<(), Box<dyn 
     Ok(())
 }
 
+#[tokio::test]
+async fn durable_queue_observes_global_and_project_limits_then_refills()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let stamp = now();
+    let mut projects = Vec::new();
+    for index in 0..2 {
+        let root = directory.path().join(format!("project-{index}"));
+        std::fs::create_dir_all(root.join(".ba-agent"))?;
+        std::fs::write(
+            root.join(".ba-agent/project.toml"),
+            format!(
+                "version = 1\nmax_concurrency = {}\n",
+                if index == 0 { 1 } else { 2 }
+            ),
+        )?;
+        let project = Project {
+            id: EntityId::new(),
+            name: format!("project-{index}"),
+            root_path: root.to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "zh-CN".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        projects.push(project);
+    }
+    SchedulerPolicyService::new(store.clone()).set_global(2)?;
+    let tasks = [
+        task(&projects[0].id, "first project first", false, &[]),
+        task(&projects[0].id, "first project queued", false, &[]),
+        task(&projects[1].id, "second project first", false, &[]),
+    ];
+    for task in &tasks {
+        store.upsert_task(task)?;
+    }
+    let dispatcher = DispatchCoordinator::new(store.clone(), directory.path().join("worktrees"));
+    let first = dispatcher.enqueue_with_prompt(&tasks[0].id, None, Some("first prompt".into()))?;
+    let waiting = dispatcher.enqueue(&tasks[1].id, None)?;
+    let second_project = dispatcher.enqueue(&tasks[2].id, None)?;
+
+    let runtime = Arc::new(HoldingRuntime::new());
+    let control = RuntimeCoordinator::new(store.clone(), runtime.clone())
+        .with_queue(directory.path().join("worktrees"));
+    let launched = control.drain_queue().await?;
+    assert_eq!(launched.len(), 2);
+    assert_eq!(
+        store
+            .get_run(&first.run.id)?
+            .ok_or_else(|| missing("first run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    assert_eq!(
+        store
+            .get_run(&second_project.run.id)?
+            .ok_or_else(|| missing("second project run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    assert_eq!(
+        store
+            .get_run(&waiting.run.id)?
+            .ok_or_else(|| missing("waiting run missing"))?
+            .status,
+        RunStatus::Queued
+    );
+    assert_eq!(
+        runtime
+            .launches
+            .lock()
+            .map_err(|_| missing("launch log poisoned"))?[0]
+            .1,
+        "first prompt"
+    );
+
+    control.cancel(&first.run.id, "test").await?;
+    for _ in 0..50 {
+        if store
+            .get_run(&waiting.run.id)?
+            .is_some_and(|run| run.status == RunStatus::Running)
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        store
+            .get_run(&waiting.run.id)?
+            .ok_or_else(|| missing("refilled run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    assert!(store.list_dispatches_by_status("queued")?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn independent_control_processes_cannot_overclaim_the_global_pool()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let database = directory.path().join("state.sqlite3");
+    let first_store = SqliteStore::open(&database)?;
+    let second_store = SqliteStore::open(&database)?;
+    let project_root = directory.path().join("project");
+    std::fs::create_dir_all(project_root.join(".ba-agent"))?;
+    std::fs::write(
+        project_root.join(".ba-agent/project.toml"),
+        "version = 1\nmax_concurrency = 1\n",
+    )?;
+    let stamp = now();
+    let project = Project {
+        id: EntityId::new(),
+        name: "shared".into(),
+        root_path: project_root.to_string_lossy().into_owned(),
+        description: String::new(),
+        language: "zh-CN".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    first_store.upsert_project(&project)?;
+    SchedulerPolicyService::new(first_store.clone()).set_global(1)?;
+    let first_task = task(&project.id, "first", false, &[]);
+    let second_task = task(&project.id, "second", false, &[]);
+    first_store.upsert_task(&first_task)?;
+    first_store.upsert_task(&second_task)?;
+    let dispatcher =
+        DispatchCoordinator::new(first_store.clone(), directory.path().join("worktrees"));
+    dispatcher.enqueue(&first_task.id, None)?;
+    dispatcher.enqueue(&second_task.id, None)?;
+
+    let first_runtime = Arc::new(HoldingRuntime::new());
+    let second_runtime = Arc::new(HoldingRuntime::new());
+    let first_control = RuntimeCoordinator::new(first_store, first_runtime.clone())
+        .with_queue(directory.path().join("worktrees"));
+    let second_control = RuntimeCoordinator::new(second_store.clone(), second_runtime.clone())
+        .with_queue(directory.path().join("worktrees"));
+    let (first_result, second_result) =
+        tokio::join!(first_control.drain_queue(), second_control.drain_queue(),);
+    first_result?;
+    second_result?;
+    let launches = first_runtime
+        .launches
+        .lock()
+        .map_err(|_| missing("launch log poisoned"))?
+        .len()
+        + second_runtime
+            .launches
+            .lock()
+            .map_err(|_| missing("launch log poisoned"))?
+            .len();
+    assert_eq!(launches, 1);
+    assert_eq!(
+        second_store.list_runs_by_status(RunStatus::Running)?.len(),
+        1
+    );
+    assert_eq!(
+        second_store.list_runs_by_status(RunStatus::Queued)?.len(),
+        1
+    );
+    Ok(())
+}
+
 #[test]
 fn dispatch_coordinator_isolates_write_tasks_in_a_detached_worktree()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -241,8 +478,9 @@ fn dispatch_coordinator_isolates_write_tasks_in_a_detached_worktree()
     let worktrees = tempfile::tempdir()?;
     let candidate = task(&fixture.project_id, "writer", true, &["src"]);
     fixture.store.upsert_task(&candidate)?;
-    let bundle = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
-        .enqueue(&candidate.id, None)?;
+    let dispatch = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf());
+    let mut bundle = dispatch.enqueue(&candidate.id, None)?;
+    bundle.worktree = dispatch.activate_worktree(&candidate, &bundle.run.id)?;
     let isolated = bundle
         .worktree
         .ok_or_else(|| missing("write-task worktree missing"))?;
@@ -266,8 +504,8 @@ fn dispatch_coordinator_isolates_write_tasks_in_a_detached_worktree()
     fixture
         .store
         .transition_task(&candidate.id, TaskStatus::Ready)?;
-    let retry = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
-        .enqueue(&candidate.id, None)?;
+    let mut retry = dispatch.enqueue(&candidate.id, None)?;
+    retry.worktree = dispatch.activate_worktree(&candidate, &retry.run.id)?;
     let retried_worktree = retry
         .worktree
         .ok_or_else(|| missing("retry worktree missing"))?;
@@ -308,8 +546,9 @@ async fn passed_configured_gates_finalize_local_commit_and_receipt()
     let worktrees = tempfile::tempdir()?;
     let candidate = task(&fixture.project_id, "writer", true, &["src"]);
     fixture.store.upsert_task(&candidate)?;
-    let bundle = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
-        .enqueue(&candidate.id, None)?;
+    let dispatch = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf());
+    let mut bundle = dispatch.enqueue(&candidate.id, None)?;
+    bundle.worktree = dispatch.activate_worktree(&candidate, &bundle.run.id)?;
     let worktree = bundle
         .worktree
         .ok_or_else(|| missing("write-task worktree missing"))?;
@@ -540,7 +779,9 @@ fn dispatch_alpha_runs(fixture: &AlphaFixture) -> Result<AlphaRuns, Box<dyn std:
     let dispatch = DispatchCoordinator::new(fixture.store.clone(), fixture.worktree_root.clone());
     let mut writers = Vec::new();
     for (index, writer) in fixture.writers.iter().enumerate() {
-        writers.push(dispatch.enqueue(&writer.id, Some(&fixture.profile_ids[index]))?);
+        let mut bundle = dispatch.enqueue(&writer.id, Some(&fixture.profile_ids[index]))?;
+        bundle.worktree = dispatch.activate_worktree(writer, &bundle.run.id)?;
+        writers.push(bundle);
     }
     let reader = dispatch.enqueue(&fixture.reader.id, Some(&fixture.profile_ids[3]))?;
     let paths = writers
@@ -556,18 +797,16 @@ fn dispatch_alpha_runs(fixture: &AlphaFixture) -> Result<AlphaRuns, Box<dyn std:
     assert_eq!(paths.len(), 3);
     assert!(reader.worktree.is_none());
 
-    let capacity_error = dispatch
-        .enqueue(&fixture.fifth.id, Some(&fixture.profile_ids[4]))
-        .err()
-        .ok_or_else(|| missing("a fifth concurrent run was accepted"))?;
-    assert!(capacity_error.to_string().contains("concurrency_limit"));
+    let fifth = dispatch.enqueue(&fixture.fifth.id, Some(&fixture.profile_ids[4]))?;
+    assert_eq!(fifth.run.status, RunStatus::Queued);
+    assert!(fifth.worktree.is_none());
     assert_eq!(
         fixture
             .store
             .get_task(&fixture.fifth.id)?
             .ok_or_else(|| missing("fifth task missing"))?
             .status,
-        TaskStatus::Ready
+        TaskStatus::Queued
     );
     Ok(AlphaRuns { writers, reader })
 }
@@ -980,6 +1219,8 @@ fn recovery_orphans_missing_process_and_preserves_resume_path()
         run_id: fixture.run_id.clone(),
         agent_profile_id: None,
         status: "running".into(),
+        queue_position: 0,
+        prompt: None,
         created_at: stamp,
         updated_at: stamp,
     };

@@ -73,6 +73,14 @@ async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, un
       await json(route, { adapters: runtime ? [{ id: 'codex', capabilities: runtime }] : [] })
       return
     }
+    if (path === '/api/v1/dispatches/queue') {
+      await json(route, [])
+      return
+    }
+    if (path === '/api/v1/scheduler') {
+      await json(route, { globalMaxConcurrency: 4, projects: [] })
+      return
+    }
     await json(route, [])
   })
 }
@@ -83,7 +91,7 @@ async function mockDemoFallback(page: Page) {
   }, 503))
 }
 
-async function mockLongRunApi(page: Page) {
+async function mockLongRunApi(page: Page, withQueue = false) {
   const now = '2026-08-25T06:00:00Z'
   const projectId = '01LONGPROJECT00000000000001'
   const taskId = '01LONGTASK000000000000000001'
@@ -126,6 +134,72 @@ async function mockLongRunApi(page: Page) {
         app_server: true, exec_json_fallback: true, approvals: true, resume: true,
         guide: true, cancellation: true, degraded_reason: null,
       } }] })
+      return
+    }
+    if (path === '/api/v1/dispatches/queue') {
+      const queuedTask = (id: string, title: string) => ({
+        id,
+        project_id: projectId,
+        workstream_id: '01WORKSTREAM',
+        milestone_id: null,
+        title,
+        description: '',
+        status: 'queued',
+        write: false,
+        path_scope: [],
+        depends_on: [],
+        created_at: now,
+        updated_at: now,
+      })
+      const queuedRun = (id: string, taskId: string) => ({
+        id,
+        task_id: taskId,
+        agent_profile_id: '01REVIEWER',
+        status: 'queued',
+        adapter: 'codex',
+        runtime_run_id: null,
+        runtime_thread_id: null,
+        started_at: null,
+        finished_at: null,
+        created_at: now,
+        updated_at: now,
+        event_sequence: 1,
+      })
+      const firstTask = queuedTask('01QUEUETASK000000000000001', '等待容量的架构检查')
+      const secondTask = queuedTask('01QUEUETASK000000000000002', '等待容量的文档检查')
+      await json(route, withQueue ? [
+        { dispatch: { id: '01QUEUEDISPATCH00000000001', task_id: firstTask.id, run_id: '01QUEUERUN000000000000001', queue_position: 1 }, run: queuedRun('01QUEUERUN000000000000001', firstTask.id), task: firstTask },
+        { dispatch: { id: '01QUEUEDISPATCH00000000002', task_id: secondTask.id, run_id: '01QUEUERUN000000000000002', queue_position: 2 }, run: queuedRun('01QUEUERUN000000000000002', secondTask.id), task: secondTask },
+      ] : [])
+      return
+    }
+    if (path === '/api/v1/dispatches/queue/reorder' && route.request().method() === 'POST') {
+      await json(route, [])
+      return
+    }
+    if (path.startsWith('/api/v1/dispatches/') && path.endsWith('/cancel') && route.request().method() === 'POST') {
+      await json(route, { run: { status: 'cancelled' }, event: { kind: 'run.cancel_requested' } })
+      return
+    }
+    if (path === '/api/v1/scheduler') {
+      await json(route, {
+        globalMaxConcurrency: 4,
+        projects: [{
+          projectId,
+          requestedMaxConcurrency: 3,
+          effectiveMaxConcurrency: 3,
+          cappedByGlobal: false,
+        }],
+      })
+      return
+    }
+    if (path.startsWith('/api/v1/scheduler/projects/') && route.request().method() === 'POST') {
+      await json(route, {
+        projectId,
+        requestedMaxConcurrency: 2,
+        effectiveMaxConcurrency: 2,
+        cappedByGlobal: false,
+      })
       return
     }
     if (path === '/api/v1/workstreams') {
@@ -380,6 +454,49 @@ test('a write task dispatch keeps role permissions explicit before launch', asyn
   await page.getByRole('button', { name: '确认派发' }).click()
   expect((await dispatchRequest).postDataJSON()).toEqual({ taskId: draftTaskId, agentProfileId: '01PROFILE' })
   await expect(page.getByRole('status').filter({ hasText: '任务已派发' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('the durable queue can be reordered and cancelled from the workflow register', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page, true)
+  await page.goto('/workflows')
+  await expect(page.getByRole('heading', { name: '等待启动' })).toBeVisible()
+  await expect(page.getByText('2 项 · 全局上限 4')).toBeVisible()
+  const reorderRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/dispatches/queue/reorder')
+  await page.getByRole('button', { name: /下移/ }).first().click()
+  expect((await reorderRequest).postDataJSON()).toEqual({
+    dispatchIds: ['01QUEUEDISPATCH00000000002', '01QUEUEDISPATCH00000000001'],
+  })
+  const cancelRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname.endsWith('/01QUEUEDISPATCH00000000001/cancel'))
+  await page.getByRole('button', { name: '取消', exact: true }).first().click()
+  await cancelRequest
+  await expect(page.getByRole('status').filter({ hasText: '排队任务已取消' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('global and project concurrency limits are editable from settings', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/settings')
+  const globalInput = page.getByLabel('全局共享上限')
+  await expect(globalInput).toHaveValue('4')
+  await globalInput.fill('6')
+  const globalRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/scheduler')
+  await page.getByRole('button', { name: '应用' }).click()
+  expect((await globalRequest).postDataJSON()).toEqual({ maxConcurrency: 6 })
+  const projectSelect = page.locator('.project-limits select').first()
+  await expect(projectSelect).toHaveValue('3')
+  const projectRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname.startsWith('/api/v1/scheduler/projects/'))
+  await projectSelect.selectOption('2')
+  expect((await projectRequest).postDataJSON()).toEqual({ maxConcurrency: 2 })
+  await expect(page.getByRole('status').filter({ hasText: '项目并发上限已更新' })).toBeVisible()
   await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })

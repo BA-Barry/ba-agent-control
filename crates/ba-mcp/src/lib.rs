@@ -372,8 +372,63 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             BTreeMap::from([
                 ("task_id", field("Task ULID")),
                 ("agent_profile_id", field("Agent profile ULID")),
+                ("prompt", field("Optional task prompt override")),
             ]),
             &["task_id", "agent_profile_id"],
+            false,
+        ),
+        definition(
+            "dispatch.queue",
+            "List the global durable dispatch queue in launch order.",
+            BTreeMap::new(),
+            &[],
+            true,
+        ),
+        definition(
+            "dispatch.reorder",
+            "Replace the queued dispatch order using every queued dispatch exactly once.",
+            BTreeMap::from([(
+                "dispatch_ids",
+                json!({"type":"array","items":{"type":"string"}}),
+            )]),
+            &["dispatch_ids"],
+            false,
+        ),
+        definition(
+            "dispatch.cancel",
+            "Cancel one queued dispatch before it starts.",
+            BTreeMap::from([("dispatch_id", field("Dispatch ULID"))]),
+            &["dispatch_id"],
+            false,
+        ),
+        definition(
+            "scheduler.get",
+            "Read global and per-project concurrency policy.",
+            BTreeMap::new(),
+            &[],
+            true,
+        ),
+        definition(
+            "scheduler.set",
+            "Set the global shared concurrency maximum.",
+            BTreeMap::from([(
+                "max_concurrency",
+                json!({"type":"integer","minimum":1,"maximum":64}),
+            )]),
+            &["max_concurrency"],
+            false,
+        ),
+        definition(
+            "scheduler.project.set",
+            "Set one project's concurrency maximum, not exceeding the global maximum.",
+            BTreeMap::from([
+                ("project_id", field("Project ULID")),
+                (
+                    "max_concurrency",
+                    json!({"type":"integer","minimum":1,"maximum":64}),
+                ),
+            ]),
+            &["project_id", "max_concurrency"],
             false,
         ),
         definition(

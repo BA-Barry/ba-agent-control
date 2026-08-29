@@ -6,8 +6,8 @@ use ba_scheduler::{DispatchCoordinator, RuntimeCoordinator, ensure_builtin_agent
 use ba_store::SqliteStore;
 
 #[tokio::test]
-#[ignore = "requires a logged-in Codex CLI and performs four live model turns"]
-async fn four_profiles_run_concurrently_and_the_fifth_is_blocked()
+#[ignore = "requires a logged-in Codex CLI and performs five live model turns"]
+async fn four_profiles_run_concurrently_and_the_fifth_waits_then_refills()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
@@ -38,10 +38,10 @@ async fn four_profiles_run_concurrently_and_the_fifth_is_blocked()
         })
         .collect::<Result<Vec<_>, _>>()?;
     let worktree_root = directory.path().join("worktrees");
-    let coordinator = RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default()));
+    let coordinator = RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default()))
+        .with_queue(worktree_root.clone());
     let mut events = coordinator.subscribe_events();
 
-    let mut launches = Vec::new();
     let mut run_ids = BTreeSet::new();
     let mut task_ids = Vec::new();
     for (index, profile_id) in selected.iter().enumerate() {
@@ -49,34 +49,35 @@ async fn four_profiles_run_concurrently_and_the_fifth_is_blocked()
         store.upsert_task(&task)?;
         task_ids.push(task.id.clone());
         let bundle = DispatchCoordinator::new(store.clone(), worktree_root.clone())
-            .enqueue(&task.id, Some(profile_id))?;
+            .enqueue_with_prompt(
+                &task.id,
+                Some(profile_id),
+                Some("Respond with exactly BA_AGENT_PARALLEL_OK. Do not use tools.".into()),
+            )?;
         run_ids.insert(bundle.run.id.clone());
-        let coordinator = coordinator.clone();
-        launches.push(tokio::spawn(async move {
-            coordinator
-                .launch(
-                    bundle,
-                    Some("Respond with exactly BA_AGENT_PARALLEL_OK. Do not use tools.".into()),
-                )
-                .await
-        }));
-    }
-    for launch in launches {
-        launch.await??;
     }
 
     let fifth = read_task(&project.id, "capacity-probe");
     store.upsert_task(&fifth)?;
-    assert!(
-        DispatchCoordinator::new(store.clone(), worktree_root)
-            .enqueue(&fifth.id, None)
-            .is_err(),
-        "the fifth task bypassed the four-run concurrency limit"
+    let fifth_bundle = DispatchCoordinator::new(store.clone(), worktree_root).enqueue_with_prompt(
+        &fifth.id,
+        None,
+        Some("Respond with exactly BA_AGENT_QUEUE_OK. Do not use tools.".into()),
+    )?;
+    run_ids.insert(fifth_bundle.run.id.clone());
+    task_ids.push(fifth.id.clone());
+    assert_eq!(coordinator.drain_queue().await?.len(), 4);
+    assert_eq!(
+        store
+            .get_run(&fifth_bundle.run.id)?
+            .ok_or("fifth run missing")?
+            .status,
+        ba_core::RunStatus::Queued,
     );
 
     let completed = tokio::time::timeout(Duration::from_secs(240), async {
         let mut completed = BTreeSet::new();
-        while completed.len() < 4 {
+        while completed.len() < 5 {
             let event = events.recv().await?;
             if run_ids.contains(&event.run_id) && event.kind == "runtime.succeeded" {
                 completed.insert(event.run_id);
@@ -90,7 +91,7 @@ async fn four_profiles_run_concurrently_and_the_fifth_is_blocked()
             let _ignored = coordinator.cancel(run_id, "live_test_timeout").await;
         }
     }
-    assert_eq!(completed??.len(), 4);
+    assert_eq!(completed??.len(), 5);
     for task_id in task_ids {
         assert_eq!(
             store

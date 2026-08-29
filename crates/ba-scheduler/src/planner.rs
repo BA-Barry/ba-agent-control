@@ -69,6 +69,36 @@ pub struct DispatchPlan {
     pub blocked: BTreeMap<EntityId, Vec<ScheduleBlocker>>,
 }
 
+/// Validate the parts of a queued task that cannot become true later.
+#[must_use]
+pub fn queue_blockers_for(task: &Task, tasks: &[Task]) -> Vec<ScheduleBlocker> {
+    let tasks_by_id = tasks
+        .iter()
+        .map(|candidate| (candidate.id.clone(), candidate))
+        .collect::<BTreeMap<_, _>>();
+    let mut blockers = Vec::new();
+    if task.status != TaskStatus::Ready {
+        blockers.push(ScheduleBlocker::NotReady {
+            status: task.status,
+        });
+        return blockers;
+    }
+    if dependency_cycle(task, &tasks_by_id) {
+        blockers.push(ScheduleBlocker::DependencyCycle);
+    }
+    for dependency_id in &task.depends_on {
+        if !tasks_by_id.contains_key(dependency_id) {
+            blockers.push(ScheduleBlocker::MissingDependency {
+                task_id: dependency_id.clone(),
+            });
+        }
+    }
+    if let Err(blocker) = Reservation::from_task(task) {
+        blockers.push(blocker);
+    }
+    blockers
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reservation {
     pub task_id: EntityId,

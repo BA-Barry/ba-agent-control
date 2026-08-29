@@ -19,13 +19,16 @@ use ba_core::{
 };
 use chrono::Utc;
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, Params, Transaction, backup::Backup, params};
+use rusqlite::{
+    Connection, OptionalExtension, Params, Transaction, TransactionBehavior, backup::Backup, params,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use thiserror::Error;
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 const MIGRATION_0001: &str = include_str!("../migrations/0001_initial.sql");
+const MIGRATION_0002: &str = include_str!("../migrations/0002_scheduler_settings.sql");
 
 /// Thread-safe handle to the process-wide SQLite database.
 #[derive(Clone, Debug)]
@@ -96,6 +99,38 @@ impl SqliteStore {
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
         schema_version(&self.connection.lock())
+    }
+
+    pub fn get_scheduler_setting<T: DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, StoreError> {
+        let value = self
+            .connection
+            .lock()
+            .query_row(
+                "SELECT value FROM scheduler_settings WHERE key=?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        value
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub fn set_scheduler_setting<T: Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), StoreError> {
+        self.connection.lock().execute(
+            "INSERT INTO scheduler_settings(key,value,updated_at) VALUES (?1,?2,?3) \
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            params![key, json(value)?, timestamp(now())],
+        )?;
+        Ok(())
     }
 
     pub fn upsert_project(&self, project: &Project) -> Result<(), StoreError> {
@@ -427,6 +462,66 @@ impl SqliteStore {
         )
     }
 
+    /// Atomically claim a queued run after evaluating current durable state.
+    ///
+    /// An immediate SQLite transaction serializes claims from the HTTP service,
+    /// CLI/MCP processes, and restart recovery. The predicate receives the queued
+    /// run and task, all currently active runs, and all tasks as one consistent view.
+    pub fn claim_queued_run_if<F>(
+        &self,
+        id: &EntityId,
+        predicate: F,
+    ) -> Result<Option<Run>, StoreError>
+    where
+        F: FnOnce(&Run, &Task, &[Run], &[Task]) -> bool,
+    {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(mut run): Option<Run> = get_json(
+            &transaction,
+            "SELECT data FROM runs WHERE id=?1",
+            params![id.as_str()],
+        )?
+        else {
+            return Ok(None);
+        };
+        if run.status != RunStatus::Queued {
+            return Ok(None);
+        }
+        let task: Task = required_json(
+            &transaction,
+            "SELECT data FROM tasks WHERE id=?1",
+            params![run.task_id.as_str()],
+            "task",
+            &run.task_id,
+        )?;
+        let active_runs: Vec<Run> = list_json(
+            &transaction,
+            "SELECT data FROM runs WHERE status IN ('starting','running','waiting_approval','orphaned') ORDER BY updated_at ASC",
+            [],
+        )?;
+        let tasks: Vec<Task> = list_json(&transaction, "SELECT data FROM tasks", [])?;
+        if !predicate(&run, &task, &active_runs, &tasks) {
+            return Ok(None);
+        }
+        run.status = RunStatus::Starting;
+        run.updated_at = now();
+        let affected = transaction.execute(
+            "UPDATE runs SET status=?1,updated_at=?2,data=?3 WHERE id=?4 AND status='queued'",
+            params![
+                RunStatus::Starting.as_str(),
+                timestamp(run.updated_at),
+                json(&run)?,
+                id.as_str()
+            ],
+        )?;
+        if affected == 0 {
+            return Ok(None);
+        }
+        transaction.commit()?;
+        Ok(Some(run))
+    }
+
     pub fn list_project_runs(&self, project_id: &EntityId) -> Result<Vec<Run>, StoreError> {
         list_json(
             &self.connection.lock(),
@@ -592,6 +687,121 @@ impl SqliteStore {
             "SELECT data FROM dispatches WHERE run_id=?1 ORDER BY updated_at DESC",
             params![run_id.as_str()],
         )
+    }
+
+    /// List dispatches with one durable status in queue order.
+    pub fn list_dispatches_by_status(&self, status: &str) -> Result<Vec<Dispatch>, StoreError> {
+        let mut values: Vec<Dispatch> = list_json(
+            &self.connection.lock(),
+            "SELECT data FROM dispatches WHERE status=?1 ORDER BY updated_at ASC",
+            params![status],
+        )?;
+        values.sort_by(|left, right| {
+            left.queue_position
+                .cmp(&right.queue_position)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(values)
+    }
+
+    /// Move a task to queued and create its run and dispatch atomically.
+    pub fn queue_dispatch(
+        &self,
+        task_id: &EntityId,
+        run: &Run,
+        dispatch: &mut Dispatch,
+    ) -> Result<Task, StoreError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let mut task: Task = required_json(
+            &transaction,
+            "SELECT data FROM tasks WHERE id=?1",
+            params![task_id.as_str()],
+            "task",
+            task_id,
+        )?;
+        task.status.ensure_transition(TaskStatus::Queued)?;
+        task.status = TaskStatus::Queued;
+        task.updated_at = now();
+        let mut statement =
+            transaction.prepare("SELECT data FROM dispatches WHERE status='queued'")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut maximum = 0_i64;
+        for row in rows {
+            maximum = maximum.max(serde_json::from_str::<Dispatch>(&row?)?.queue_position);
+        }
+        drop(statement);
+        dispatch.queue_position = maximum.saturating_add(1);
+        transaction.execute(
+            "UPDATE tasks SET status=?1,updated_at=?2,data=?3 WHERE id=?4",
+            params![
+                TaskStatus::Queued.as_str(),
+                timestamp(task.updated_at),
+                json(&task)?,
+                task.id.as_str()
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO runs(id,task_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![run.id.as_str(),run.task_id.as_str(),optional_id(run.agent_profile_id.as_ref()),run.status.as_str(),timestamp(run.updated_at),json(run)?],
+        )?;
+        transaction.execute(
+            "INSERT INTO dispatches(id,task_id,run_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![dispatch.id.as_str(),dispatch.task_id.as_str(),dispatch.run_id.as_str(),optional_id(dispatch.agent_profile_id.as_ref()),dispatch.status,timestamp(dispatch.updated_at),json(dispatch)?],
+        )?;
+        transaction.commit()?;
+        Ok(task)
+    }
+
+    /// Replace the global queued-dispatch order atomically.
+    ///
+    /// The caller must provide every currently queued dispatch exactly once. This
+    /// prevents stale clients from silently dropping newly queued work.
+    pub fn reorder_queued_dispatches(
+        &self,
+        ordered_ids: &[EntityId],
+    ) -> Result<Vec<Dispatch>, StoreError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let mut queued = {
+            let mut statement =
+                transaction.prepare("SELECT data FROM dispatches WHERE status='queued'")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            let mut values = Vec::new();
+            for row in rows {
+                values.push(serde_json::from_str::<Dispatch>(&row?)?);
+            }
+            values
+        };
+        let existing = queued
+            .iter()
+            .map(|dispatch| dispatch.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let requested = ordered_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        if existing != requested || requested.len() != ordered_ids.len() {
+            return Err(StoreError::InvalidQueueOrder);
+        }
+        let positions = ordered_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.clone(), i64::try_from(index).unwrap_or(i64::MAX) + 1))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let stamp = now();
+        for dispatch in &mut queued {
+            dispatch.queue_position = positions[&dispatch.id];
+            dispatch.updated_at = stamp;
+            transaction.execute(
+                "UPDATE dispatches SET updated_at=?1,data=?2 WHERE id=?3",
+                params![timestamp(stamp), json(dispatch)?, dispatch.id.as_str()],
+            )?;
+        }
+        transaction.commit()?;
+        queued.sort_by_key(|dispatch| dispatch.queue_position);
+        Ok(queued)
     }
 
     /// Atomically update every dispatch attached to one run.
@@ -1086,6 +1296,12 @@ fn migrate(connection: &mut Connection, from: u32) -> Result<(), StoreError> {
         transaction.pragma_update(None, "user_version", 1)?;
         transaction.commit()?;
     }
+    if from < 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_0002)?;
+        transaction.pragma_update(None, "user_version", 2)?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 
@@ -1217,6 +1433,8 @@ pub enum StoreError {
     InvalidTerminalRunStatus(String),
     #[error("invalid entity link: {0}")]
     InvalidEntityLink(&'static str),
+    #[error("queue order must contain every queued dispatch exactly once")]
+    InvalidQueueOrder,
 }
 
 #[cfg(test)]

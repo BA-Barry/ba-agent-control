@@ -11,18 +11,15 @@ use ba_core::{EntityId, Project, Task, TaskStatus, Workstream, now};
 use ba_git::RepoPath;
 use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
-use ba_scheduler::{
-    FinalizationCoordinator, GateCoordinator, GateDefinition, configured_gate,
-    ensure_builtin_agent_profiles,
-};
+use ba_scheduler::{GateDefinition, configured_gate, ensure_builtin_agent_profiles};
 use ba_store::SqliteStore;
 use directories::ProjectDirs;
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    AdapterCommand, ApprovalCommand, ApprovalDecision, GateCommand, ProjectCommand, ReceiptCommand,
-    RunCommand, TaskCommand, WorkstreamCommand,
+    AdapterCommand, ApprovalCommand, ApprovalDecision, DispatchArgs, DispatchCommand, GateCommand,
+    ProjectCommand, ReceiptCommand, RunCommand, TaskCommand, WorkstreamCommand,
 };
 
 #[derive(Clone, Debug)]
@@ -206,7 +203,7 @@ pub fn workstream(paths: &DataPaths, command: WorkstreamCommand, json: bool) -> 
     }
 }
 
-pub fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow::Result<()> {
+pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow::Result<()> {
     let store = paths.store()?;
     match command {
         TaskCommand::Add {
@@ -285,7 +282,14 @@ pub fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow::Resu
         TaskCommand::List { project_id } => emit(&store.list_tasks(&id_of(&project_id)?)?, json),
         TaskCommand::Status { id, status } => {
             let status = TaskStatus::from_str(&status)?;
-            emit(&store.transition_task(&id_of(&id)?, status)?, json)
+            let id = id_of(&id)?;
+            let value = crate::local_client::post(
+                paths,
+                &format!("/api/v1/tasks/{id}/transition"),
+                json!({"status": status.as_str()}),
+            )
+            .await?;
+            emit(&value, json)
         }
     }
 }
@@ -321,23 +325,62 @@ pub async fn run(paths: &DataPaths, command: RunCommand, json: bool) -> anyhow::
     }
 }
 
-pub async fn dispatch(
-    paths: &DataPaths,
-    task_id: &str,
-    agent_profile_id: Option<&str>,
-    json: bool,
-) -> anyhow::Result<()> {
-    let task_id = id_of(task_id)?;
-    let profile_id = agent_profile_id.map(id_of).transpose()?;
-    let value = crate::local_client::post(
-        paths,
-        "/api/v1/dispatches",
-        json!({
-            "taskId": task_id,
-            "agentProfileId": profile_id,
-        }),
-    )
-    .await?;
+pub async fn dispatch(paths: &DataPaths, args: DispatchArgs, json: bool) -> anyhow::Result<()> {
+    let value = match args.command {
+        Some(DispatchCommand::Queue) => {
+            crate::local_client::get(paths, "/api/v1/dispatches/queue").await?
+        }
+        Some(DispatchCommand::Reorder { dispatch_ids }) => {
+            let ids = dispatch_ids
+                .iter()
+                .map(|id| id_of(id))
+                .collect::<Result<Vec<_>, _>>()?;
+            crate::local_client::post(
+                paths,
+                "/api/v1/dispatches/queue/reorder",
+                json!({"dispatchIds": ids}),
+            )
+            .await?
+        }
+        Some(DispatchCommand::Cancel { id }) => {
+            let id = id_of(&id)?;
+            crate::local_client::post(paths, &format!("/api/v1/dispatches/{id}/cancel"), json!({}))
+                .await?
+        }
+        Some(DispatchCommand::Global { maximum }) => {
+            crate::local_client::post(
+                paths,
+                "/api/v1/scheduler",
+                json!({"maxConcurrency": maximum}),
+            )
+            .await?
+        }
+        Some(DispatchCommand::ProjectLimit {
+            project_id,
+            maximum,
+        }) => {
+            let project_id = id_of(&project_id)?;
+            crate::local_client::post(
+                paths,
+                &format!("/api/v1/scheduler/projects/{project_id}"),
+                json!({"maxConcurrency": maximum}),
+            )
+            .await?
+        }
+        None => {
+            let task_id = args
+                .task_id
+                .context("task id is required unless a dispatch subcommand is used")?;
+            let task_id = id_of(&task_id)?;
+            let profile_id = args.agent_profile_id.as_deref().map(id_of).transpose()?;
+            crate::local_client::post(
+                paths,
+                "/api/v1/dispatches",
+                json!({"taskId": task_id, "agentProfileId": profile_id}),
+            )
+            .await?
+        }
+    };
     emit(&value, json)
 }
 
@@ -384,7 +427,7 @@ pub async fn gate(paths: &DataPaths, command: GateCommand, json: bool) -> anyhow
             cwd,
             timeout_ms,
         } => {
-            let cwd = cwd.canonicalize()?;
+            let _cwd = cwd.canonicalize()?;
             let task_id = id_of(&task_id)?;
             let task = store.get_task(&task_id)?.context("task not found")?;
             let project = store
@@ -393,19 +436,20 @@ pub async fn gate(paths: &DataPaths, command: GateCommand, json: bool) -> anyhow
             let project_root = PathBuf::from(project.root_path).canonicalize()?;
             let configured = configured_gate(&project_root, &name)?;
             ensure_gate_command_matches(&configured, &program, &args)?;
-            let definition = GateDefinition {
-                name,
+            let _definition = GateDefinition {
+                name: name.clone(),
                 program,
                 args,
                 timeout_ms,
             };
             let run_id = run_id.as_deref().map(id_of).transpose()?;
-            let gate = GateCoordinator::new(store.clone())
-                .run(&task_id, run_id.as_ref(), &cwd, &definition)
-                .await?;
-            let finalization = FinalizationCoordinator::new(store, paths.worktrees.clone())
-                .finalize_if_eligible(&task_id, run_id.as_ref())?;
-            emit(&json!({"gate": gate, "finalization": finalization}), json)
+            let value = crate::local_client::post(
+                paths,
+                "/api/v1/gates/run",
+                json!({"taskId": task_id, "runId": run_id, "gate": name}),
+            )
+            .await?;
+            emit(&value, json)
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::path::PathBuf;
 
 use ba_core::{
     Dispatch, EntityId, Run, RunStatus, Task, TaskStatus, Worktree, WorktreeStatus, now,
@@ -8,7 +8,7 @@ use ba_store::SqliteStore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{Scheduler, SchedulerConfig, SchedulerError};
+use crate::{SchedulerError, queue_blockers_for};
 
 /// Durable result of admitting and queueing one task.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,7 +23,6 @@ pub struct DispatchBundle {
 pub struct DispatchCoordinator {
     store: SqliteStore,
     worktree_root: PathBuf,
-    config: SchedulerConfig,
 }
 
 impl DispatchCoordinator {
@@ -32,15 +31,7 @@ impl DispatchCoordinator {
         Self {
             store,
             worktree_root,
-            config: SchedulerConfig::default(),
         }
-    }
-
-    /// Override the default four-run concurrency limit.
-    #[must_use]
-    pub const fn with_config(mut self, config: SchedulerConfig) -> Self {
-        self.config = config;
-        self
     }
 
     /// Admit a task, create its detached worktree when needed, and persist a queued run.
@@ -53,6 +44,21 @@ impl DispatchCoordinator {
         &self,
         task_id: &EntityId,
         agent_profile_id: Option<&EntityId>,
+    ) -> Result<DispatchBundle, SchedulerError> {
+        self.enqueue_with_prompt(task_id, agent_profile_id, None)
+    }
+
+    /// Persist a task in the durable global queue with an optional prompt override.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid task/profile, duplicate active task, unsafe
+    /// write scope, dependency graph defect, or failed atomic persistence.
+    pub fn enqueue_with_prompt(
+        &self,
+        task_id: &EntityId,
+        agent_profile_id: Option<&EntityId>,
+        prompt: Option<String>,
     ) -> Result<DispatchBundle, SchedulerError> {
         if let Some(profile_id) = agent_profile_id {
             if self.store.get_agent_profile(profile_id)?.is_none() {
@@ -69,7 +75,29 @@ impl DispatchCoordinator {
             task = self.store.transition_task(task_id, TaskStatus::Ready)?;
         }
 
-        self.admit(&task)?;
+        let project_tasks = self.store.list_tasks(&task.project_id)?;
+        let blockers = queue_blockers_for(&task, &project_tasks);
+        if !blockers.is_empty() {
+            return Err(SchedulerError::NotSchedulable(serde_json::to_string(
+                &blockers,
+            )?));
+        }
+        for status in [
+            RunStatus::Queued,
+            RunStatus::Starting,
+            RunStatus::Running,
+            RunStatus::WaitingApproval,
+            RunStatus::Orphaned,
+        ] {
+            if self
+                .store
+                .list_runs_by_status(status)?
+                .iter()
+                .any(|run| run.task_id == task.id)
+            {
+                return Err(SchedulerError::AlreadyActive(task.id.to_string()));
+            }
+        }
         let stamp = now();
         let run = Run {
             id: EntityId::new(),
@@ -84,70 +112,40 @@ impl DispatchCoordinator {
             created_at: stamp,
             updated_at: stamp,
         };
-        let worktree = self.create_worktree(&task, &run.id)?;
-
-        self.store.transition_task(task_id, TaskStatus::Queued)?;
-        self.store.upsert_run(&run)?;
-        let dispatch = Dispatch {
+        let mut dispatch = Dispatch {
             id: EntityId::new(),
             task_id: task.id,
             run_id: run.id.clone(),
             agent_profile_id: agent_profile_id.cloned(),
             status: "queued".into(),
+            queue_position: 0,
+            prompt: prompt.filter(|value| !value.trim().is_empty()),
             created_at: stamp,
             updated_at: stamp,
         };
-        self.store.upsert_dispatch(&dispatch)?;
-
-        let worktree = if let Some(mut worktree) = worktree {
-            worktree.run_id = Some(run.id.clone());
-            worktree.status = WorktreeStatus::Active;
-            worktree.updated_at = now();
-            self.store.upsert_worktree(&worktree)?;
-            Some(worktree)
-        } else {
-            None
-        };
+        self.store.queue_dispatch(task_id, &run, &mut dispatch)?;
         self.store.append_run_event(
             &run.id,
             "dispatch.queued",
             json!({
                 "dispatch_id": dispatch.id,
-                "worktree_id": worktree.as_ref().map(|item| &item.id)
+                "queue_position": dispatch.queue_position
             }),
         )?;
         Ok(DispatchBundle {
             dispatch,
             run,
-            worktree,
+            worktree: None,
         })
     }
 
-    fn admit(&self, task: &Task) -> Result<(), SchedulerError> {
-        let all_project_tasks = self.store.list_tasks(&task.project_id)?;
-        let mut scheduler = Scheduler::new(self.config)?;
-        let mut restored = BTreeSet::new();
-        for status in [
-            RunStatus::Queued,
-            RunStatus::Starting,
-            RunStatus::Running,
-            RunStatus::WaitingApproval,
-            RunStatus::Orphaned,
-        ] {
-            for active_run in self.store.list_runs_by_status(status)? {
-                if !restored.insert(active_run.task_id.clone()) {
-                    continue;
-                }
-                if let Some(active_task) = self.store.get_task(&active_run.task_id)? {
-                    scheduler.restore(&active_task)?;
-                }
-            }
-        }
-        scheduler.admit(task, &all_project_tasks)?;
-        Ok(())
-    }
-
-    fn create_worktree(
+    /// Create a detached write worktree without activating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when project lookup, scope validation, or Git worktree
+    /// creation fails.
+    pub fn create_worktree(
         &self,
         task: &Task,
         run_id: &EntityId,
@@ -195,5 +193,27 @@ impl DispatchCoordinator {
         };
         self.store.upsert_worktree(&worktree)?;
         Ok(Some(worktree))
+    }
+
+    /// Create and durably attach a write worktree to a claimed run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when worktree creation or persistence fails.
+    pub fn activate_worktree(
+        &self,
+        task: &Task,
+        run_id: &EntityId,
+    ) -> Result<Option<Worktree>, SchedulerError> {
+        let worktree = self.create_worktree(task, run_id)?;
+        if let Some(mut worktree) = worktree {
+            worktree.run_id = Some(run_id.clone());
+            worktree.status = WorktreeStatus::Active;
+            worktree.updated_at = now();
+            self.store.upsert_worktree(&worktree)?;
+            Ok(Some(worktree))
+        } else {
+            Ok(None)
+        }
     }
 }

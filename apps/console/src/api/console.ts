@@ -6,6 +6,7 @@ import type {
   ConsoleSnapshot,
   GateResult,
   ProjectSummary,
+  QueueSummary,
   ReceiptSummary,
   RunEvent,
   RunStatus,
@@ -175,6 +176,27 @@ interface ApiAdaptersResponse {
   }>
 }
 
+interface ApiQueueResource {
+  dispatch: {
+    id: string
+    run_id: string
+    task_id: string
+    queue_position: number
+  }
+  run: ApiRun
+  task: ApiTask
+}
+
+interface ApiSchedulerPolicy {
+  globalMaxConcurrency: number
+  projects: Array<{
+    projectId: string
+    requestedMaxConcurrency: number
+    effectiveMaxConcurrency: number
+    cappedByGlobal: boolean
+  }>
+}
+
 interface ProjectBundle {
   project: ApiProject
   workstreams: ApiWorkstream[]
@@ -334,6 +356,8 @@ function mapSnapshot(
   approvals: ApiApproval[],
   bundles: ProjectBundle[],
   adapters: ApiAdaptersResponse,
+  queued: ApiQueueResource[],
+  scheduler: ApiSchedulerPolicy,
 ): ConsoleSnapshot {
   const allTasks = bundles.flatMap((bundle) => bundle.tasks)
   const allRuns = bundles.flatMap((bundle) => bundle.runs)
@@ -492,6 +516,18 @@ function mapSnapshot(
   const orderedReceipts = [...receipts].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const codex = adapters.adapters?.find((adapter) => adapter.id === 'codex')?.capabilities
   const version = codex?.version
+  const queue: QueueSummary[] = queued.map((item) => ({
+    dispatchId: item.dispatch.id,
+    runId: item.run.id,
+    taskId: item.task.id,
+    projectId: item.task.project_id,
+    taskCode: shortCode(item.task.id),
+    title: item.task.title,
+    titleEn: item.task.title,
+    position: item.dispatch.queue_position,
+    write: item.task.write,
+    dependencies: item.task.depends_on.map(shortCode),
+  }))
 
   return {
     source: 'live',
@@ -501,6 +537,8 @@ function mapSnapshot(
     projects: projectSummaries,
     tasks,
     agentProfiles,
+    queue,
+    scheduler,
     runs,
     approvals: approvalSummaries,
     gates,
@@ -534,18 +572,20 @@ function mapSnapshot(
 
 export async function loadConsoleSnapshot(): Promise<ConsoleSnapshot> {
   try {
-    const [session, overview, profiles, approvals, adapters] = await Promise.all([
+    const [session, overview, profiles, approvals, adapters, queued, scheduler] = await Promise.all([
       apiFetch<SessionResponse>('/api/v1/session'),
       apiFetch<OverviewResponse>('/api/v1/overview'),
       apiFetch<ApiAgentProfile[]>('/api/v1/agent-profiles'),
       apiFetch<ApiApproval[]>('/api/v1/approvals'),
       apiFetch<ApiAdaptersResponse>('/api/v1/adapters'),
+      apiFetch<ApiQueueResource[]>('/api/v1/dispatches/queue'),
+      apiFetch<ApiSchedulerPolicy>('/api/v1/scheduler'),
     ])
     const projects = overview.projects.length > 0
       ? overview.projects
       : await apiFetch<ApiProject[]>('/api/v1/projects')
     const bundles = await Promise.all(projects.map(loadProjectBundle))
-    return mapSnapshot(session, overview, profiles, approvals, bundles, adapters)
+    return mapSnapshot(session, overview, profiles, approvals, bundles, adapters, queued, scheduler)
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Local service unavailable'
     return { ...demoSnapshot, fallbackReason: reason }
@@ -629,6 +669,22 @@ export function dispatchTask(taskId: string, agentProfileId: string, csrfToken: 
     taskId,
     agentProfileId,
   })
+}
+
+export function reorderDispatchQueue(dispatchIds: string[], csrfToken: string) {
+  return mutate('/api/v1/dispatches/queue/reorder', csrfToken, { dispatchIds })
+}
+
+export function cancelDispatch(id: string, csrfToken: string) {
+  return mutate(`/api/v1/dispatches/${encodeURIComponent(id)}/cancel`, csrfToken)
+}
+
+export function setGlobalConcurrency(maxConcurrency: number, csrfToken: string) {
+  return mutate<ApiSchedulerPolicy>('/api/v1/scheduler', csrfToken, { maxConcurrency })
+}
+
+export function setProjectConcurrency(projectId: string, maxConcurrency: number, csrfToken: string) {
+  return mutate(`/api/v1/scheduler/projects/${encodeURIComponent(projectId)}`, csrfToken, { maxConcurrency })
 }
 
 export function runConfiguredGate(

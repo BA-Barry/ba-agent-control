@@ -8,6 +8,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 
 - Register local projects and organize workstreams, milestones, and dependent tasks.
 - Dispatch Codex-backed runs with capability detection and structured event capture.
+- Share a durable global run pool across projects (default four), apply project-specific caps, and automatically start queued work in dependency/submission order while serializing overlapping writers.
 - Isolate writes in Git worktrees and protect path scopes.
 - Run configurable quality gates, create local commits, and preserve receipts.
 - Control runs, approvals, gates, and receipts through the loopback HTTP/SSE API and MCP tools.
@@ -34,6 +35,16 @@ The UI server binds to `127.0.0.1` only and prints a one-time session URL. Runti
 Running `ui` again while the default local service is alive safely reuses and reopens that authenticated service instead of starting a duplicate process.
 `doctor --json` reports `controlService.status` as `running`, `stopped`, or `stale`. An invalid one-time launch link shows a local recovery page with the exact command to reopen the console; it never guesses or persists the rejected credential.
 
+Queue and concurrency controls are available in the console under **工作流与任务** and **设置与适配器**, or from the CLI:
+
+```powershell
+ba-agent-control dispatch queue
+ba-agent-control dispatch reorder <DISPATCH_ID> <DISPATCH_ID>
+ba-agent-control dispatch cancel <DISPATCH_ID>
+ba-agent-control dispatch global 4
+ba-agent-control dispatch project-limit <PROJECT_ID> 2
+```
+
 ## 中文简介
 
 BA Agent 是面向高级个人开发者的本地研发控制面。它复用已登录的 Codex CLI，把写任务隔离在 Git worktree 中，对 push、merge、deploy、删除和提权操作保留人工审批，并用可校验的哈希链永久保存质量收据。默认界面为中文，完整支持英文，默认不启用遥测、云同步或模型 API 直连。
@@ -50,7 +61,7 @@ python plugins/personal-marketplace/plugins/ba-agent-control/scripts/validate_bu
 python plugins/personal-marketplace/plugins/ba-agent-control/scripts/test_hook_guard.py
 ```
 
-See [Architecture](docs/architecture.md), [Product backlog](docs/product-backlog.md), [Completion audit](docs/completion-audit.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [中文使用说明](docs/usage.zh-CN.md), [Architecture](docs/architecture.md), [Product backlog](docs/product-backlog.md), [Completion audit](docs/completion-audit.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## License
 

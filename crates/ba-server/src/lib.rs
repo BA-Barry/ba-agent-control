@@ -32,8 +32,8 @@ use ba_github::{GitHubAdapter, GitHubError};
 use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    RecoveryAction, RecoveryCoordinator, RuntimeCoordinator, configured_gate,
-    configured_gate_names, ensure_builtin_agent_profiles,
+    RecoveryAction, RecoveryCoordinator, RuntimeCoordinator, SchedulerPolicyService,
+    configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
 use futures_util::Stream;
@@ -371,7 +371,8 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
     ensure_builtin_agent_profiles(&store)?;
     let runtime: Arc<dyn RuntimeAdapter> = Arc::new(CodexAdapter::new(config.codex_binary));
     let control =
-        RuntimeCoordinator::with_event_sender(store.clone(), runtime.clone(), events.clone());
+        RuntimeCoordinator::with_event_sender(store.clone(), runtime.clone(), events.clone())
+            .with_queue(config.worktree_root.clone());
     let state = AppState {
         store: store.clone(),
         security,
@@ -419,6 +420,9 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
                 }
             }
         }
+        if let Err(error) = control.drain_queue().await {
+            tracing::warn!(error = %error, "startup durable queue drain failed");
+        }
     });
     Ok(ServerHandle {
         address,
@@ -444,6 +448,14 @@ pub fn router(state: AppState) -> Router {
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}/transition", post(transition_task))
         .route("/dispatches", post(create_dispatch))
+        .route("/dispatches/queue", get(list_dispatch_queue))
+        .route("/dispatches/queue/reorder", post(reorder_dispatch_queue))
+        .route("/dispatches/{id}/cancel", post(cancel_dispatch))
+        .route(
+            "/scheduler",
+            get(get_scheduler_policy).post(set_scheduler_policy),
+        )
+        .route("/scheduler/projects/{id}", post(set_project_concurrency))
         .route("/runs", get(list_runs))
         .route("/runs/{id}", get(get_run))
         .route("/runs/{id}/events", get(run_events))
@@ -1005,7 +1017,15 @@ async fn transition_task(
 ) -> Result<Json<Task>, ApiError> {
     let status = TaskStatus::from_str(&input.status)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    Ok(Json(state.store.transition_task(&parse_id(&id)?, status)?))
+    let task = state.store.transition_task(&parse_id(&id)?, status)?;
+    if status == TaskStatus::Completed {
+        state
+            .control
+            .drain_queue()
+            .await
+            .map_err(ApiError::bad_gateway)?;
+    }
+    Ok(Json(task))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1023,14 +1043,162 @@ async fn create_dispatch(
     let task_id = parse_id(&input.task_id)?;
     let profile_id = input.agent_profile_id.map(|id| parse_id(&id)).transpose()?;
     let bundle = DispatchCoordinator::new(state.store.clone(), state.worktree_root.clone())
-        .enqueue(&task_id, profile_id.as_ref())
+        .enqueue_with_prompt(&task_id, profile_id.as_ref(), input.prompt)
         .map_err(|error| ApiError::conflict(error.to_string()))?;
-    let bundle = state
+    state
         .control
-        .launch(bundle, input.prompt)
+        .drain_queue()
         .await
         .map_err(ApiError::bad_gateway)?;
+    let run = state.store.get_run(&bundle.run.id)?.unwrap_or(bundle.run);
+    let dispatch = state
+        .store
+        .get_dispatch(&bundle.dispatch.id)?
+        .unwrap_or(bundle.dispatch);
+    let bundle = ba_scheduler::DispatchBundle {
+        run,
+        dispatch,
+        worktree: None,
+    };
     Ok((StatusCode::ACCEPTED, Json(json!(bundle))))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueueResource {
+    dispatch: ba_core::Dispatch,
+    run: Run,
+    task: Task,
+}
+
+async fn list_dispatch_queue(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<QueueResource>>, ApiError> {
+    let mut queue = Vec::new();
+    for dispatch in state.store.list_dispatches_by_status("queued")? {
+        let run = state
+            .store
+            .get_run(&dispatch.run_id)?
+            .ok_or_else(|| ApiError::not_found("queued run not found"))?;
+        let task = state
+            .store
+            .get_task(&dispatch.task_id)?
+            .ok_or_else(|| ApiError::not_found("queued task not found"))?;
+        queue.push(QueueResource {
+            dispatch,
+            run,
+            task,
+        });
+    }
+    Ok(Json(queue))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderQueueInput {
+    dispatch_ids: Vec<String>,
+}
+
+async fn reorder_dispatch_queue(
+    State(state): State<AppState>,
+    Json(input): Json<ReorderQueueInput>,
+) -> Result<Json<Vec<ba_core::Dispatch>>, ApiError> {
+    let ids = input
+        .dispatch_ids
+        .iter()
+        .map(|id| parse_id(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json(state.store.reorder_queued_dispatches(&ids)?))
+}
+
+async fn cancel_dispatch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let dispatch = state
+        .store
+        .get_dispatch(&parse_id(&id)?)?
+        .ok_or_else(|| ApiError::not_found("dispatch not found"))?;
+    let (run, event) = state
+        .control
+        .cancel(&dispatch.run_id, "local_user")
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok(Json(
+        json!({"dispatchId": dispatch.id, "run": run, "event": event}),
+    ))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchedulerPolicyResource {
+    global_max_concurrency: usize,
+    projects: Vec<ba_scheduler::ProjectConcurrency>,
+}
+
+fn scheduler_policy_resource(state: &AppState) -> Result<SchedulerPolicyResource, ApiError> {
+    let service = SchedulerPolicyService::new(state.store.clone());
+    let global = service
+        .global()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let projects = state
+        .store
+        .list_projects()?
+        .iter()
+        .map(|project| service.project(project))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(SchedulerPolicyResource {
+        global_max_concurrency: global.global_max_concurrency,
+        projects,
+    })
+}
+
+async fn get_scheduler_policy(
+    State(state): State<AppState>,
+) -> Result<Json<SchedulerPolicyResource>, ApiError> {
+    Ok(Json(scheduler_policy_resource(&state)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetConcurrencyInput {
+    max_concurrency: usize,
+}
+
+async fn set_scheduler_policy(
+    State(state): State<AppState>,
+    Json(input): Json<SetConcurrencyInput>,
+) -> Result<Json<SchedulerPolicyResource>, ApiError> {
+    SchedulerPolicyService::new(state.store.clone())
+        .set_global(input.max_concurrency)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    state
+        .control
+        .drain_queue()
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok(Json(scheduler_policy_resource(&state)?))
+}
+
+async fn set_project_concurrency(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SetConcurrencyInput>,
+) -> Result<Json<ba_scheduler::ProjectConcurrency>, ApiError> {
+    let project = state
+        .store
+        .get_project(&parse_id(&id)?)?
+        .ok_or_else(|| ApiError::not_found("project not found"))?;
+    let result = SchedulerPolicyService::new(state.store.clone())
+        .set_project(&project, input.max_concurrency)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    state
+        .control
+        .drain_queue()
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    Ok(Json(result))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1165,14 +1333,19 @@ async fn retry_run(
     let bundle = DispatchCoordinator::new(state.store.clone(), state.worktree_root.clone())
         .enqueue(&task.id, previous.agent_profile_id.as_ref())
         .map_err(|error| ApiError::conflict(error.to_string()))?;
-    let bundle = state
+    state
         .control
-        .launch(bundle, None)
+        .drain_queue()
         .await
         .map_err(ApiError::bad_gateway)?;
+    let run = state.store.get_run(&bundle.run.id)?.unwrap_or(bundle.run);
+    let dispatch = state
+        .store
+        .get_dispatch(&bundle.dispatch.id)?
+        .unwrap_or(bundle.dispatch);
     Ok((
         StatusCode::ACCEPTED,
-        Json(json!({"mode":"retried","run":bundle.run,"dispatch":bundle.dispatch})),
+        Json(json!({"mode":"retried","run":run,"dispatch":dispatch})),
     ))
 }
 
@@ -1386,6 +1559,13 @@ async fn run_gate(
             "task.completed"
         };
         let _event = state.append_event(run_id, event, json!({"finalization": finalization}))?;
+    }
+    if finalization.is_some() {
+        state
+            .control
+            .drain_queue()
+            .await
+            .map_err(ApiError::bad_gateway)?;
     }
     Ok(Json(json!({"gate": gate, "finalization": finalization})))
 }
