@@ -32,3 +32,9 @@ After the usage window recovered on 2026-08-25, a minimal live App Server contra
 | 3 | `01M0W38DKFN5TAV6G9KBD5SYFC` | `01M0W38DN0XDV45CB8W86JARB9` / `01a03834-3ed6-7241-9316-e2e2b0eb0913` | 28 | `01M0W3A6D2H00GMQ2RY2013QRZ` / `5b419fa4038b4beb4644eb090604405a52434f93811cab87dd3613004f86f95b` |
 
 The first workflow also retained an initial failed lint result when the new read-review finalizer exceeded the strict Clippy line budget. The implementation was refactored, the same configured lint gate was rerun successfully, and finalization used the latest authentic result. This exercised repair-in-place and confirmed that a failed result is never rewritten or discarded. After the final restart, all three Tasks remained `completed`, all three Runs remained `succeeded`, every Run retained sequence 1–28, all 18 required gate passes remained present, and the three receipt hashes formed one valid forward chain.
+
+## Assigned-workflow upgrade acceptance
+
+On 2026-08-30, after explicit user authorization, the live local service was stopped and the real database was upgraded from schema v2 to v3 with the release-mode binary built from `5514de0`. Migration created `ba-agent.db.pre-v2.20260830T114503Z.bak` before changing the database. The upgraded database passed startup integrity checking and retained one registered project, nine Tasks, eight built-in Agent profiles, and its valid permanent Receipt chain.
+
+The replacement service started from the new release binary on loopback with schema v3. An authenticated production-console check loaded the embedded app with CSP, matched the advertised session origin, returned all existing entities, and exposed six built-in workflow templates with zero project-template diagnostics. All nine existing Tasks remained readable; the new handoff collection was empty as expected. No workflow instance, handoff, Git remote, tag, release, or public repository was created during this read-only activation check.
