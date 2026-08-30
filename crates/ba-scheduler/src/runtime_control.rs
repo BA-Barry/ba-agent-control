@@ -1,13 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    fmt::Write as _,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 use ba_core::{AgentProfile, Approval, EntityId, Run, RunEvent, RunStatus, Task, TaskStatus, now};
 use ba_runtime::{
     ApprovalDecision, ResumeRequest, RunRequest, RuntimeAdapter, RuntimeEvent, RuntimeEventKind,
-    RuntimeTransport, SandboxMode,
+    RuntimeTransport, SandboxMode, StdioMcpServer,
 };
 use ba_store::{SqliteStore, TerminalRunUpdate};
 use serde_json::{Value, json};
@@ -26,6 +27,7 @@ pub struct RuntimeCoordinator {
     runtime: Arc<dyn RuntimeAdapter>,
     events: broadcast::Sender<RunEvent>,
     worktree_root: Option<PathBuf>,
+    managed_mcp_server: Option<StdioMcpServer>,
     drain_lock: Arc<Mutex<()>>,
 }
 
@@ -53,6 +55,7 @@ impl RuntimeCoordinator {
             runtime,
             events,
             worktree_root: None,
+            managed_mcp_server: None,
             drain_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -61,6 +64,21 @@ impl RuntimeCoordinator {
     #[must_use]
     pub fn with_queue(mut self, worktree_root: PathBuf) -> Self {
         self.worktree_root = Some(worktree_root);
+        self
+    }
+
+    /// Inject the trusted local BA Agent MCP server into every managed runtime.
+    #[must_use]
+    pub fn with_managed_mcp_server(mut self, binary: PathBuf, data_directory: &Path) -> Self {
+        self.managed_mcp_server = Some(StdioMcpServer {
+            name: "ba_agent".into(),
+            command: binary,
+            args: vec![
+                "--data-dir".into(),
+                data_directory.to_string_lossy().into_owned(),
+                "mcp".into(),
+            ],
+        });
         self
     }
 
@@ -162,13 +180,21 @@ impl RuntimeCoordinator {
         );
         let cwd = cwd.canonicalize()?;
         let handoffs = HandoffService::new(self.store.clone()).list_for_task(&task.id)?;
+        let has_direct_downstream = self
+            .store
+            .list_tasks(&task.project_id)?
+            .iter()
+            .any(|candidate| candidate.depends_on.contains(&task.id));
         let prompt = compose_runtime_prompt(
             &task,
+            &bundle.run,
             profile.as_ref(),
             &handoffs,
             prompt_override.as_deref(),
+            self.managed_mcp_server.is_some(),
+            has_direct_downstream,
         );
-        let environment = managed_run_environment(&task)?;
+        let environment = managed_run_environment(&task, &bundle.run)?;
         let mut runtime_events = self.runtime.subscribe();
 
         let launched = match self
@@ -182,6 +208,7 @@ impl RuntimeCoordinator {
                     SandboxMode::ReadOnly
                 },
                 environment,
+                mcp_servers: self.managed_mcp_server.iter().cloned().collect(),
             })
             .await
         {
@@ -484,9 +511,22 @@ impl RuntimeCoordinator {
             |worktree| PathBuf::from(worktree.path),
         );
         let handoffs = HandoffService::new(self.store.clone()).list_for_task(&task.id)?;
+        let has_direct_downstream = self
+            .store
+            .list_tasks(&task.project_id)?
+            .iter()
+            .any(|candidate| candidate.depends_on.contains(&task.id));
         let prompt = format!(
             "恢复先前中断的 BA Agent 任务。\n\n{}",
-            compose_runtime_prompt(&task, profile.as_ref(), &handoffs, prompt_override,)
+            compose_runtime_prompt(
+                &task,
+                &run,
+                profile.as_ref(),
+                &handoffs,
+                prompt_override,
+                self.managed_mcp_server.is_some(),
+                has_direct_downstream,
+            )
         );
         let request = ResumeRequest {
             thread_id,
@@ -497,7 +537,8 @@ impl RuntimeCoordinator {
             } else {
                 SandboxMode::ReadOnly
             },
-            environment: managed_run_environment(&task)?,
+            environment: managed_run_environment(&task, &run)?,
+            mcp_servers: self.managed_mcp_server.iter().cloned().collect(),
         };
         Ok(RecoveryLaunch { task, request })
     }
@@ -727,9 +768,12 @@ impl RuntimeCoordinator {
 
 fn compose_runtime_prompt(
     task: &Task,
+    run: &Run,
     profile: Option<&AgentProfile>,
     handoffs: &[HandoffArtifact],
     prompt_override: Option<&str>,
+    managed_mcp_available: bool,
+    has_direct_downstream: bool,
 ) -> String {
     let mut prompt = prompt_override
         .map(str::trim)
@@ -738,6 +782,26 @@ fn compose_runtime_prompt(
     if let Some(section) = handoff_prompt_section(handoffs) {
         prompt.push_str("\n\n");
         prompt.push_str(&section);
+    }
+    prompt.push_str("\n\n");
+    let _write_result = write!(
+        prompt,
+        "BA Agent 托管上下文：project_id={}，task_id={}，run_id={}。",
+        task.project_id, task.id, run.id
+    );
+    if managed_mcp_available {
+        prompt.push_str(
+            " 已注入名为 ba_agent 的 BA Agent MCP；读取或更新项目控制面时必须优先使用其结构化工具。",
+        );
+        if has_direct_downstream {
+            prompt.push_str(
+                " 当前任务存在直接下游任务；若任务要求交接，必须在结束前调用 handoff.create，并使用当前 task_id 作为 source_task_id、当前 run_id 作为 source_run_id。",
+            );
+        } else {
+            prompt.push_str(
+                " 当前任务没有直接下游任务；不得调用 handoff.create，也不得创建占位任务。完成本任务后直接报告结果。",
+            );
+        }
     }
     prompt
 }
@@ -766,12 +830,18 @@ fn compose_task_prompt(task: &Task, profile: Option<&AgentProfile>) -> String {
     sections.join("\n\n")
 }
 
-fn managed_run_environment(task: &Task) -> Result<BTreeMap<String, String>, SchedulerError> {
+fn managed_run_environment(
+    task: &Task,
+    run: &Run,
+) -> Result<BTreeMap<String, String>, SchedulerError> {
     let allowed_paths = std::env::join_paths(task.path_scope.iter().map(PathBuf::from))?
         .to_string_lossy()
         .into_owned();
     Ok(BTreeMap::from([
         ("BA_AGENT_MANAGED_RUN".into(), "1".into()),
+        ("BA_AGENT_PROJECT_ID".into(), task.project_id.to_string()),
+        ("BA_AGENT_TASK_ID".into(), task.id.to_string()),
+        ("BA_AGENT_RUN_ID".into(), run.id.to_string()),
         ("BA_AGENT_ALLOWED_PATHS".into(), allowed_paths),
         ("BA_AGENT_GATE_STATUS".into(), "pending".into()),
         ("BA_AGENT_OPERATION_APPROVED".into(), "0".into()),

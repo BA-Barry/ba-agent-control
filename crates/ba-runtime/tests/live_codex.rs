@@ -14,6 +14,7 @@ async fn logged_in_codex_completes_an_app_server_turn() -> Result<(), Box<dyn st
             cwd: directory.path().canonicalize()?,
             sandbox: SandboxMode::ReadOnly,
             environment: BTreeMap::from([("BA_AGENT_MANAGED_RUN".into(), "1".into())]),
+            mcp_servers: Vec::new(),
         })
         .await?;
 

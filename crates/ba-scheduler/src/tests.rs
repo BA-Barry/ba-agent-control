@@ -31,7 +31,7 @@ use crate::{
 #[derive(Debug)]
 struct HoldingRuntime {
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
-    launches: Arc<Mutex<Vec<(String, String)>>>,
+    launches: Arc<Mutex<Vec<(String, RunRequest)>>>,
 }
 
 impl HoldingRuntime {
@@ -56,7 +56,7 @@ impl RuntimeAdapter for HoldingRuntime {
             .lock()
             .map_err(|_| RuntimeError::Protocol("launch log poisoned".into()))?;
         let run_id = format!("holding-{}", launches.len() + 1);
-        launches.push((run_id.clone(), request.prompt));
+        launches.push((run_id.clone(), request));
         Ok(RuntimeRunHandle {
             run_id,
             runtime_thread_id: None,
@@ -71,6 +71,7 @@ impl RuntimeAdapter for HoldingRuntime {
             cwd: request.cwd,
             sandbox: request.sandbox,
             environment: request.environment,
+            mcp_servers: request.mcp_servers,
         })
         .await
     }
@@ -377,16 +378,26 @@ async fn structured_handoffs_are_persisted_injected_and_tamper_evident()
         .enqueue_with_prompt(&destination.id, None, Some("Implement the repair".into()))?;
     let runtime = Arc::new(HoldingRuntime::new());
     RuntimeCoordinator::new(store, runtime.clone())
+        .with_managed_mcp_server(PathBuf::from("ba-agent-control"), Path::new("state"))
         .launch(bundle, Some("Implement the repair".into()))
         .await?;
-    let launched_prompt = &runtime
+    let launch_log = runtime
         .launches
         .lock()
-        .map_err(|_| missing("launch log poisoned"))?[0]
-        .1;
+        .map_err(|_| missing("launch log poisoned"))?;
+    let launched = &launch_log[0].1;
+    let launched_prompt = &launched.prompt;
     assert!(launched_prompt.contains("Implement the repair"));
     assert!(launched_prompt.contains("Root cause fixed"));
     assert!(launched_prompt.contains("Add the regression fixture first"));
+    assert!(launched_prompt.contains("已注入名为 ba_agent 的 BA Agent MCP"));
+    assert!(launched_prompt.contains("当前任务没有直接下游任务；不得调用 handoff.create"));
+    assert_eq!(launched.mcp_servers.len(), 1);
+    assert_eq!(launched.mcp_servers[0].name, "ba_agent");
+    assert_eq!(
+        launched.environment.get("BA_AGENT_TASK_ID"),
+        Some(&destination.id.to_string())
+    );
 
     let path = repository.join(&created.artifact.path);
     let forged = std::fs::read_to_string(&path)?.replace("Root cause fixed", "Forged result");
@@ -647,14 +658,14 @@ async fn durable_queue_observes_global_and_project_limits_then_refills()
             .status,
         RunStatus::Queued
     );
-    assert_eq!(
-        runtime
-            .launches
-            .lock()
-            .map_err(|_| missing("launch log poisoned"))?[0]
-            .1,
-        "first prompt"
-    );
+    let first_prompt = runtime
+        .launches
+        .lock()
+        .map_err(|_| missing("launch log poisoned"))?[0]
+        .1
+        .prompt
+        .clone();
+    assert!(first_prompt.starts_with("first prompt\n\nBA Agent 托管上下文："));
 
     control.cancel(&first.run.id, "test").await?;
     for _ in 0..50 {

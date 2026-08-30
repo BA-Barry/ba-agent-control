@@ -62,6 +62,7 @@ pub struct ServerConfig {
     pub worktree_root: PathBuf,
     pub codex_binary: PathBuf,
     pub control_descriptor_path: PathBuf,
+    pub ba_agent_binary: PathBuf,
 }
 
 impl ServerConfig {
@@ -81,6 +82,8 @@ impl ServerConfig {
             worktree_root,
             codex_binary: PathBuf::from("codex"),
             control_descriptor_path,
+            ba_agent_binary: std::env::current_exe()
+                .unwrap_or_else(|_| PathBuf::from("ba-agent-control")),
         }
     }
 }
@@ -369,12 +372,17 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
     let control_claim =
         claim_control_descriptor(&config.control_descriptor_path, &descriptor).await?;
     let (events, _receiver) = broadcast::channel(1_024);
-    let store = SqliteStore::open(config.database_path)?;
+    let store = SqliteStore::open(&config.database_path)?;
     ensure_builtin_agent_profiles(&store)?;
+    let data_directory = config
+        .database_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), FsPath::to_path_buf);
     let runtime: Arc<dyn RuntimeAdapter> = Arc::new(CodexAdapter::new(config.codex_binary));
     let control =
         RuntimeCoordinator::with_event_sender(store.clone(), runtime.clone(), events.clone())
-            .with_queue(config.worktree_root.clone());
+            .with_queue(config.worktree_root.clone())
+            .with_managed_mcp_server(config.ba_agent_binary, &data_directory);
     let state = AppState {
         store: store.clone(),
         security,
@@ -2070,6 +2078,7 @@ mod tests {
                 cwd: request.cwd,
                 sandbox: request.sandbox,
                 environment: request.environment,
+                mcp_servers: request.mcp_servers,
             })
             .await
         }

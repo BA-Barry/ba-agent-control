@@ -28,7 +28,11 @@ pub async fn serve(paths: &DataPaths) -> anyhow::Result<()> {
     let store = paths.store()?;
     let backend = StoreBackend {
         control: RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default()))
-            .with_queue(paths.worktrees.clone()),
+            .with_queue(paths.worktrees.clone())
+            .with_managed_mcp_server(
+                std::env::current_exe().context("unable to resolve BA Agent executable")?,
+                &paths.root,
+            ),
         store,
         worktree_root: paths.worktrees.clone(),
     };

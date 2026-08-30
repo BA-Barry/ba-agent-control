@@ -157,6 +157,16 @@ pub struct RunRequest {
     pub sandbox: SandboxMode,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<StdioMcpServer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StdioMcpServer {
+    pub name: String,
+    pub command: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +193,8 @@ pub struct ResumeRequest {
     pub sandbox: SandboxMode,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<StdioMcpServer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,14 +445,16 @@ impl CodexAdapter {
                 "threadId": thread_id,
                 "cwd": request.cwd,
                 "approvalPolicy": "on-request",
-                "sandbox": request.sandbox.cli_value()
+                "sandbox": request.sandbox.cli_value(),
+                "config": mcp_config(request)?
             })
         } else {
             json!({
                 "cwd": request.cwd,
                 "approvalPolicy": "on-request",
                 "sandbox": request.sandbox.cli_value(),
-                "ephemeral": false
+                "ephemeral": false,
+                "config": mcp_config(request)?
             })
         };
         write_json_line(
@@ -514,6 +528,7 @@ impl CodexAdapter {
             .arg("-C")
             .arg(&request.cwd)
             .envs(&request.environment);
+        apply_mcp_config_args(&mut command, request)?;
         if let Some(thread_id) = resume_thread {
             command.args(["resume", "--", thread_id, "-"]);
         } else {
@@ -658,6 +673,7 @@ impl RuntimeAdapter for CodexAdapter {
                 cwd: request.cwd,
                 sandbox: request.sandbox,
                 environment: request.environment,
+                mcp_servers: request.mcp_servers,
             },
             Some(request.thread_id),
         )
@@ -993,6 +1009,53 @@ fn turn_start_message(id: u64, thread_id: &str, prompt: &str) -> Value {
     })
 }
 
+fn mcp_config(request: &RunRequest) -> Result<Value, RuntimeError> {
+    let mut servers = serde_json::Map::new();
+    for server in &request.mcp_servers {
+        validate_mcp_server_name(&server.name)?;
+        servers.insert(
+            server.name.clone(),
+            json!({
+                "command": server.command,
+                "args": server.args,
+            }),
+        );
+    }
+    Ok(if servers.is_empty() {
+        Value::Null
+    } else {
+        json!({ "mcp_servers": servers })
+    })
+}
+
+fn apply_mcp_config_args(command: &mut Command, request: &RunRequest) -> Result<(), RuntimeError> {
+    for server in &request.mcp_servers {
+        validate_mcp_server_name(&server.name)?;
+        let command_value = serde_json::to_string(&server.command.to_string_lossy())?;
+        let args_value = serde_json::to_string(&server.args)?;
+        command
+            .arg("-c")
+            .arg(format!(
+                "mcp_servers.{}.command={command_value}",
+                server.name
+            ))
+            .arg("-c")
+            .arg(format!("mcp_servers.{}.args={args_value}", server.name));
+    }
+    Ok(())
+}
+
+fn validate_mcp_server_name(name: &str) -> Result<(), RuntimeError> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return Err(RuntimeError::InvalidMcpServerName(name.to_owned()));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct PendingApproval {
     key: String,
@@ -1019,7 +1082,14 @@ impl PendingApproval {
     }
 
     fn response(self, decision: ApprovalDecision) -> Value {
-        let result = if self.method == "item/permissions/requestApproval" {
+        let result = if self.method == "mcpServer/elicitation/request" {
+            let action = match decision {
+                ApprovalDecision::Accept | ApprovalDecision::AcceptForSession => "accept",
+                ApprovalDecision::Decline => "decline",
+                ApprovalDecision::Cancel => "cancel",
+            };
+            json!({ "action": action, "content": {}, "_meta": null })
+        } else if self.method == "item/permissions/requestApproval" {
             let permissions = if matches!(
                 decision,
                 ApprovalDecision::Accept | ApprovalDecision::AcceptForSession
@@ -1045,6 +1115,7 @@ fn is_approval_request(method: &str) -> bool {
         "item/commandExecution/requestApproval"
             | "item/fileChange/requestApproval"
             | "item/permissions/requestApproval"
+            | "mcpServer/elicitation/request"
     )
 }
 
@@ -1143,6 +1214,8 @@ pub enum RuntimeError {
     InvalidThreadId,
     #[error("invalid working directory: {0}")]
     InvalidWorkingDirectory(PathBuf),
+    #[error("invalid MCP server name: {0}")]
+    InvalidMcpServerName(String),
     #[error("runtime process did not expose {0}")]
     MissingProcessPipe(&'static str),
     #[error("App Server handshake timed out")]
@@ -1306,6 +1379,54 @@ mod tests {
     }
 
     #[test]
+    fn managed_stdio_mcp_is_encoded_as_thread_config() -> Result<(), RuntimeError> {
+        let request = RunRequest {
+            prompt: "inspect".into(),
+            cwd: PathBuf::from("workspace"),
+            sandbox: SandboxMode::ReadOnly,
+            environment: BTreeMap::new(),
+            mcp_servers: vec![StdioMcpServer {
+                name: "ba_agent".into(),
+                command: PathBuf::from("ba-agent-control"),
+                args: vec!["--data-dir".into(), "state".into(), "mcp".into()],
+            }],
+        };
+
+        assert_eq!(
+            mcp_config(&request)?,
+            json!({
+                "mcp_servers": {
+                    "ba_agent": {
+                        "command": "ba-agent-control",
+                        "args": ["--data-dir", "state", "mcp"]
+                    }
+                }
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_stdio_mcp_rejects_dotted_names() {
+        let request = RunRequest {
+            prompt: "inspect".into(),
+            cwd: PathBuf::from("workspace"),
+            sandbox: SandboxMode::ReadOnly,
+            environment: BTreeMap::new(),
+            mcp_servers: vec![StdioMcpServer {
+                name: "ba_agent.override".into(),
+                command: PathBuf::from("ba-agent-control"),
+                args: Vec::new(),
+            }],
+        };
+
+        assert!(matches!(
+            mcp_config(&request),
+            Err(RuntimeError::InvalidMcpServerName(_))
+        ));
+    }
+
+    #[test]
     fn approval_responses_match_current_app_server_contract() -> Result<(), RuntimeError> {
         let command = PendingApproval::from_message(&json!({
             "jsonrpc": "2.0",
@@ -1339,6 +1460,22 @@ mod tests {
                     "permissions": { "network": { "enabled": true } },
                     "scope": "session"
                 }
+            })
+        );
+
+        let mcp = PendingApproval::from_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "mcpServer/elicitation/request",
+            "params": { "mode": "form", "requestedSchema": { "type": "object", "properties": {} } }
+        }))
+        .ok_or_else(|| RuntimeError::Protocol("invalid MCP approval fixture".to_owned()))?;
+        assert_eq!(
+            mcp.response(ApprovalDecision::Accept),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 42,
+                "result": { "action": "accept", "content": {}, "_meta": null }
             })
         );
         Ok(())

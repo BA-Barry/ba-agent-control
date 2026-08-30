@@ -90,6 +90,12 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 **Target outcome:** distinguish expired session, stopped service, stale descriptor, and occupied port; offer a safe restart action and redirect the browser to the newly authenticated local session.
 
+### 10. Make terminal workflow nodes conclude without an empty handoff
+
+**Progress (2026-08-30):** addressed in the managed Codex prompt. Before each launch or recovery, BA Agent derives whether the Task has a direct downstream dependency. A terminal Task is explicitly told to report its result and not call `handoff.create` or create a placeholder Task. Tasks with a direct downstream retain the existing structured-handoff instruction.
+
+**Observed evidence:** during the live MCP approval bridge acceptance, a Planner successfully verified the incoming handoff but then attempted an outgoing `handoff.create` with an empty destination list. BA Agent rejected that invalid request and preserved the resulting failed Run instead of manufacturing success. The prompt refinement prevents the same terminal-node mistake in future managed launches.
+
 ## Role-extension rule
 
 Do not add a new Agent profile merely for a new topic. Prefer a Skill or workflow template when the existing role, permissions, and review perspective remain correct. Add a role only after repeated tasks demonstrate a distinct durable responsibility, permission boundary, or evaluation standard. Increasing the number of roles must not be presented as increasing runtime concurrency.
