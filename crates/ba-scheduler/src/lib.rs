@@ -8,6 +8,7 @@ mod approval;
 mod dispatch;
 mod finalize;
 mod gate;
+mod onboarding;
 mod planner;
 mod policy;
 mod profiles;
@@ -20,6 +21,10 @@ pub use finalize::{FinalizationCoordinator, FinalizationResult};
 pub use gate::{
     GateCoordinator, GateDefinition, GateEligibility, GateExecution, GateRunner, configured_gate,
     configured_gate_names, evaluate_required_gates,
+};
+pub use onboarding::{
+    ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingResult,
+    ProjectOnboardingService,
 };
 pub use planner::{
     DEFAULT_MAX_CONCURRENCY, DispatchPlan, Reservation, ScheduleBlocker, Scheduler,
@@ -44,6 +49,14 @@ pub enum SchedulerError {
     InvalidProjectConcurrency { requested: usize, global: usize },
     #[error("invalid project scheduler configuration: {0}")]
     InvalidProjectConfig(String),
+    #[error("invalid project onboarding request: {0}")]
+    InvalidProjectOnboarding(String),
+    #[error("project path is already registered: {0}")]
+    ProjectAlreadyRegistered(std::path::PathBuf),
+    #[error("new project directory must be empty: {0}")]
+    ProjectDirectoryNotEmpty(std::path::PathBuf),
+    #[error("Git initialization failed: {0}")]
+    GitInitialization(String),
     #[error("task is not schedulable: {0}")]
     NotSchedulable(String),
     #[error("task is already active: {0}")]

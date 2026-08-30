@@ -7,11 +7,14 @@ use std::{
 
 use anyhow::{Context, bail};
 use ba_config::{ProjectConfig, Runtime};
-use ba_core::{EntityId, Project, Task, TaskStatus, Workstream, now};
+use ba_core::{EntityId, Task, TaskStatus, Workstream, now};
 use ba_git::RepoPath;
 use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
-use ba_scheduler::{GateDefinition, configured_gate, ensure_builtin_agent_profiles};
+use ba_scheduler::{
+    GateDefinition, ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService,
+    configured_gate, ensure_builtin_agent_profiles,
+};
 use ba_store::SqliteStore;
 use directories::ProjectDirs;
 use serde::Serialize;
@@ -67,29 +70,15 @@ pub fn init(
     name: Option<String>,
     json: bool,
 ) -> anyhow::Result<()> {
-    let root = path.canonicalize().context("project root does not exist")?;
-    ensure_git_repository(&root)?;
-    let config_root = root.join(".ba-agent");
-    for directory in ["workflows", "plans", "knowledge", "receipts"] {
-        fs::create_dir_all(config_root.join(directory))?;
-    }
-    let name = name.unwrap_or_else(|| {
-        root.file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("project")
-            .to_owned()
-    });
-    let project_file = config_root.join("project.toml");
-    if !project_file.exists() {
-        fs::write(
-            &project_file,
-            format!(
-                "version = 1\nname = {name:?}\nlanguage = \"zh-CN\"\nlog_retention_days = 90\nmax_concurrency = 4\n\n[gates]\nformat = []\nlint = []\ntypecheck = []\nchanged_tests = []\nsecret_scan = []\ndiff_review = []\n"
-            ),
-        )?;
-    }
-    let project = register_project(paths, &root, Some(name))?;
-    emit(&project, json)
+    let result =
+        ProjectOnboardingService::new(paths.store()?).onboard(ProjectOnboardingRequest {
+            mode: ProjectOnboardingMode::Import,
+            path: path.to_path_buf(),
+            name,
+            description: String::new(),
+            language: "zh-CN".into(),
+        })?;
+    emit(&result.project, json)
 }
 
 pub async fn doctor(paths: &DataPaths, json_output: bool) -> anyhow::Result<()> {
@@ -161,7 +150,47 @@ pub async fn ui(paths: &DataPaths, port: u16, no_open: bool) -> anyhow::Result<(
 pub fn project(paths: &DataPaths, command: ProjectCommand, json: bool) -> anyhow::Result<()> {
     let store = paths.store()?;
     match command {
-        ProjectCommand::Add { path, name } => emit(&register_project(paths, &path, name)?, json),
+        ProjectCommand::Add { path, name } => {
+            let result =
+                ProjectOnboardingService::new(store).onboard(ProjectOnboardingRequest {
+                    mode: ProjectOnboardingMode::Import,
+                    path,
+                    name,
+                    description: String::new(),
+                    language: "zh-CN".into(),
+                })?;
+            emit(&result.project, json)
+        }
+        ProjectCommand::Import {
+            path,
+            name,
+            description,
+            language,
+        } => emit(
+            &ProjectOnboardingService::new(store).onboard(ProjectOnboardingRequest {
+                mode: ProjectOnboardingMode::Import,
+                path,
+                name,
+                description,
+                language,
+            })?,
+            json,
+        ),
+        ProjectCommand::Create {
+            path,
+            name,
+            description,
+            language,
+        } => emit(
+            &ProjectOnboardingService::new(store).onboard(ProjectOnboardingRequest {
+                mode: ProjectOnboardingMode::Create,
+                path,
+                name,
+                description,
+                language,
+            })?,
+            json,
+        ),
         ProjectCommand::List => emit(&store.list_projects()?, json),
         ProjectCommand::Show { id } => {
             let item = store
@@ -527,44 +556,6 @@ pub async fn adapter(paths: &DataPaths, command: AdapterCommand, json: bool) -> 
             bail!("unknown adapter: {adapter}")
         }
     }
-}
-
-fn register_project(
-    paths: &DataPaths,
-    path: &Path,
-    name: Option<String>,
-) -> anyhow::Result<Project> {
-    let root = path.canonicalize().context("project root does not exist")?;
-    ensure_git_repository(&root)?;
-    let stamp = now();
-    let item = Project {
-        id: EntityId::new(),
-        name: name.unwrap_or_else(|| {
-            root.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("project")
-                .to_owned()
-        }),
-        root_path: root.to_string_lossy().into_owned(),
-        description: String::new(),
-        language: "zh-CN".into(),
-        created_at: stamp,
-        updated_at: stamp,
-    };
-    paths.store()?.upsert_project(&item)?;
-    Ok(item)
-}
-
-fn ensure_git_repository(root: &Path) -> anyhow::Result<()> {
-    let output = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
-    if !output.status.success() {
-        bail!("not a Git repository: {}", root.display());
-    }
-    Ok(())
 }
 
 fn id_of(value: &str) -> anyhow::Result<EntityId> {

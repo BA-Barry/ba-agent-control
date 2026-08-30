@@ -288,6 +288,30 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             true,
         ),
         definition(
+            "project.import",
+            "Initialize BA Agent metadata and register an existing local Git repository root without replacing user configuration.",
+            BTreeMap::from([
+                ("path", field("Absolute local Git repository root")),
+                ("name", field("Optional display name")),
+                ("description", field("Optional project description")),
+                ("language", field("Optional zh-CN or en project language")),
+            ]),
+            &["path"],
+            false,
+        ),
+        definition(
+            "project.create",
+            "Create a missing or empty local directory, initialize Git and BA Agent metadata, and register the project. No remote repository is created.",
+            BTreeMap::from([
+                ("path", field("Absolute new local project path")),
+                ("name", field("Optional display name")),
+                ("description", field("Optional project description")),
+                ("language", field("Optional zh-CN or en project language")),
+            ]),
+            &["path"],
+            false,
+        ),
+        definition(
             "workstream.list",
             "List workstreams for a project.",
             BTreeMap::from([("project_id", field("Project ULID"))]),
@@ -577,5 +601,12 @@ mod tests {
                 .as_ref()
                 .is_some_and(|annotations| !annotations.destructive_hint)
         }));
+    }
+
+    #[test]
+    fn catalog_exposes_both_project_onboarding_modes() {
+        let tools = default_tools();
+        assert!(tools.iter().any(|tool| tool.name == "project.import"));
+        assert!(tools.iter().any(|tool| tool.name == "project.create"));
     }
 }

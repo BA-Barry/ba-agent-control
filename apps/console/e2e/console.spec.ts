@@ -81,6 +81,17 @@ async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, un
       await json(route, { globalMaxConcurrency: 4, projects: [] })
       return
     }
+    if (path === '/api/v1/projects/onboard' && route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as { mode: 'import' | 'create'; path: string; name: string }
+      await json(route, {
+        project: { id: '01ONBOARDEDPROJECT', name: input.name, root_path: input.path },
+        mode: input.mode,
+        createdDirectory: input.mode === 'create',
+        initializedGit: input.mode === 'create',
+        createdProjectConfig: true,
+      }, 201)
+      return
+    }
     await json(route, [])
   })
 }
@@ -391,6 +402,32 @@ test('slow and empty local APIs have explicit, honest states', async ({ page }) 
   await expect(page.getByRole('status').filter({ hasText: '正在连接本地服务' })).toBeVisible()
   await expect(page.getByRole('heading', { level: 3, name: '项目登记为空' })).toBeVisible()
   await expect(page.getByText('实时数据', { exact: true })).toBeVisible({ timeout: 10_000 })
+  await expectNoA11yViolations(page)
+})
+
+test('an empty project register guides a local-only project creation', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockEmptyApi(page)
+  await page.goto('/projects')
+  await expect(page.getByRole('heading', { name: '添加本地项目' })).toBeVisible()
+  await expect(page.getByText('不会创建 GitHub 仓库、push 或发布')).toBeVisible()
+  await page.getByRole('radio', { name: /创建本地项目/ }).click()
+  await page.getByLabel('显示名称').fill('本地引导项目')
+  await page.getByLabel('新项目绝对路径').fill('G:\\Projects\\guided-local')
+  await expect(page.getByText('创建本地目录 → 初始化 Git main → 生成 .ba-agent/ → 登记项目')).toBeVisible()
+  const requestPromise = page.waitForRequest((request) =>
+    request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/projects/onboard')
+  await page.getByRole('button', { name: '创建并登记' }).click()
+  expect((await requestPromise).postDataJSON()).toEqual({
+    mode: 'create',
+    path: 'G:\\Projects\\guided-local',
+    name: '本地引导项目',
+    description: '',
+    language: 'zh-CN',
+  })
+  await expect(page.getByRole('status').filter({ hasText: '没有创建远程仓库' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /创建第一个工作流任务/ })).toBeVisible()
+  await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })
 

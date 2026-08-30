@@ -52,11 +52,11 @@ import {
   cancelRun,
   cancelDispatch,
   createMilestone,
-  createProject,
   createTask,
   dispatchTask,
   loadConsoleSnapshot,
   messageRun,
+  onboardProject,
   reorderDispatchQueue,
   respondApproval,
   retryRun,
@@ -550,9 +550,11 @@ function PageHeader({ titleZh, titleEn, descriptionZh, descriptionEn, action }: 
 
 function ProjectsPage() {
   const text = useText()
+  const { language } = useUiSettings()
   const { data } = useConsoleSnapshot()
   const queryCache = useQueryClient()
   const [formOpen, setFormOpen] = useState(false)
+  const [onboardingMode, setOnboardingMode] = useState<'import' | 'create'>('import')
   const [milestoneFormOpen, setMilestoneFormOpen] = useState(false)
   const [name, setName] = useState('')
   const [rootPath, setRootPath] = useState('')
@@ -562,23 +564,36 @@ function ProjectsPage() {
   const [milestoneDescription, setMilestoneDescription] = useState('')
   const [milestoneDueAt, setMilestoneDueAt] = useState('')
   const [feedback, setFeedback] = useState('')
+  const [showWorkflowNextStep, setShowWorkflowNextStep] = useState(false)
+  const openedEmptyOnboarding = useRef(false)
   useEffect(() => {
     if (data.projects.length > 0 && !data.projects.some((project) => project.id === milestoneProjectId)) setMilestoneProjectId(data.projects[0].id)
   }, [data.projects, milestoneProjectId])
+  useEffect(() => {
+    if (data.source !== 'live' || data.projects.length > 0 || openedEmptyOnboarding.current) return
+    openedEmptyOnboarding.current = true
+    setFormOpen(true)
+  }, [data.projects.length, data.source])
   const createMutation = useMutation({
     mutationFn: () => {
       if (!data.csrfToken) throw new Error('Live session is unavailable')
-      return createProject({ name, rootPath, description, language: 'zh-CN' }, data.csrfToken)
+      return onboardProject({ mode: onboardingMode, name, path: rootPath, description, language: language === 'zh' ? 'zh-CN' : 'en' }, data.csrfToken)
     },
-    onSuccess: async () => {
-      setFeedback(text('项目已注册。', 'Project registered.'))
+    onSuccess: async (result) => {
+      setFeedback(result.mode === 'create'
+        ? text('本地 Git 仓库与 BA Agent 配置已经创建并登记；没有创建远程仓库。', 'The local Git repository and BA Agent configuration were created and registered; no remote repository was created.')
+        : text('现有 Git 仓库已经初始化 BA Agent 配置并登记；已有配置保持不变。', 'The existing Git repository was initialized for BA Agent and registered; existing configuration was preserved.'))
+      setShowWorkflowNextStep(true)
       setName('')
       setRootPath('')
       setDescription('')
       setFormOpen(false)
       await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
     },
-    onError: (error) => setFeedback(error instanceof Error ? error.message : text('项目注册失败。', 'Project registration failed.')),
+    onError: (error) => {
+      setShowWorkflowNextStep(false)
+      setFeedback(error instanceof Error ? error.message : text('项目添加失败。', 'Project onboarding failed.'))
+    },
   })
   const createMilestoneMutation = useMutation({
     mutationFn: () => {
@@ -593,6 +608,7 @@ function ProjectsPage() {
       }, data.csrfToken)
     },
     onSuccess: async () => {
+      setShowWorkflowNextStep(false)
       setFeedback(text('当前里程碑已登记。', 'Current milestone registered.'))
       setMilestoneName('')
       setMilestoneDescription('')
@@ -603,13 +619,13 @@ function ProjectsPage() {
     onError: (error) => setFeedback(error instanceof Error ? error.message : text('里程碑登记失败。', 'Milestone registration failed.')),
   })
   const action = data.source === 'demo'
-    ? <><DemoActionButton labelZh="登记里程碑" labelEn="Add milestone" messageZh="演示模式：尚未写入真实里程碑。" messageEn="Demo mode: no real milestone was added." /><DemoActionButton primary labelZh="注册项目" labelEn="Register project" messageZh="演示模式：尚未写入本地项目登记。" messageEn="Demo mode: no project was added to the local register." /></>
-    : <><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={milestoneFormOpen} onClick={() => { setMilestoneFormOpen((value) => !value); setFormOpen(false) }}>{milestoneFormOpen ? text('收起里程碑', 'Close milestone') : text('登记里程碑', 'Add milestone')}</button><button className="field-action primary" type="button" aria-expanded={formOpen} onClick={() => { setFormOpen((value) => !value); setMilestoneFormOpen(false) }}>{formOpen ? text('收起项目', 'Close project') : text('注册项目', 'Register project')}</button></>
-  return <section className="register-page"><PageHeader titleZh="项目控制点登记" titleEn="Project control-point register" descriptionZh="注册仓库、当前里程碑、健康状态与永久收据头。" descriptionEn="Registered repositories, milestones, health, and permanent receipt heads." action={action} />
-    {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW CONTROL POINT</span><h3>{text('注册本地 Git 仓库', 'Register a local Git repository')}</h3></header><div className="operation-fields"><label>{text('显示名称', 'Display name')}<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>{text('仓库绝对路径', 'Absolute repository path')}<input required className="mono" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="G:\Projects\example" /></label><label className="wide-field">{text('说明', 'Description')}<input value={description} onChange={(event) => setDescription(event.target.value)} /></label></div><footer><span>{text('路径必须存在并且是 Git 仓库根目录。', 'The path must exist and be the root of a Git repository.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? text('登记中…', 'Registering…') : text('确认登记', 'Register')}</button></footer></form>}
+    ? <><DemoActionButton labelZh="登记里程碑" labelEn="Add milestone" messageZh="演示模式：尚未写入真实里程碑。" messageEn="Demo mode: no real milestone was added." /><DemoActionButton primary labelZh="添加项目" labelEn="Add project" messageZh="演示模式：尚未创建或导入本地项目。" messageEn="Demo mode: no local project was created or imported." /></>
+    : <><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={milestoneFormOpen} onClick={() => { setMilestoneFormOpen((value) => !value); setFormOpen(false) }}>{milestoneFormOpen ? text('收起里程碑', 'Close milestone') : text('登记里程碑', 'Add milestone')}</button><button className="field-action primary" type="button" aria-expanded={formOpen} onClick={() => { setFormOpen((value) => !value); setMilestoneFormOpen(false); setShowWorkflowNextStep(false) }}>{formOpen ? text('收起项目', 'Close project') : text('添加项目', 'Add project')}</button></>
+  return <section className="register-page"><PageHeader titleZh="项目控制点登记" titleEn="Project control-point register" descriptionZh="导入现有 Git 根目录或创建全新的本地仓库，然后登记里程碑与永久证据。" descriptionEn="Import an existing Git root or create a new local repository, then register milestones and permanent evidence." action={action} />
+    {formOpen && <form className="operation-panel onboarding-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">PROJECT ONBOARDING</span><h3>{text('添加本地项目', 'Add a local project')}</h3><p>{text('选择导入或创建。整个过程仅发生在本机，不会创建 GitHub 仓库、push 或发布。', 'Choose import or create. Everything remains local; no GitHub repository, push, or release is created.')}</p></header><RadioGroup.Root className="onboarding-modes" aria-label={text('项目添加方式', 'Project onboarding mode')} value={onboardingMode} onValueChange={(value) => setOnboardingMode(value as 'import' | 'create')}><RadioGroup.Item value="import"><RadioGroup.Indicator aria-hidden="true">●</RadioGroup.Indicator><span><strong>{text('导入已有仓库', 'Import existing repository')}</strong><small>{text('验证 Git 根目录，保留已有配置并补齐缺少的 BA Agent 目录。', 'Verify the Git root, preserve existing configuration, and add missing BA Agent directories.')}</small></span></RadioGroup.Item><RadioGroup.Item value="create"><RadioGroup.Indicator aria-hidden="true">●</RadioGroup.Indicator><span><strong>{text('创建本地项目', 'Create local project')}</strong><small>{text('只接受不存在或空目录；初始化 main 分支、Git 和 BA Agent 配置。', 'Only a missing or empty directory is accepted; initializes main, Git, and BA Agent configuration.')}</small></span></RadioGroup.Item></RadioGroup.Root><div className="operation-fields"><label>{text('显示名称', 'Display name')}<input required value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label><label>{onboardingMode === 'create' ? text('新项目绝对路径', 'Absolute new project path') : text('Git 根目录绝对路径', 'Absolute Git root path')}<input required className="mono" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={onboardingMode === 'create' ? String.raw`G:\Projects\new-project` : String.raw`G:\Projects\existing-repository`} autoComplete="off" /></label><label className="wide-field">{text('项目说明（可选）', 'Project description (optional)')}<input value={description} onChange={(event) => setDescription(event.target.value)} /></label></div><div className="onboarding-scope" aria-live="polite"><strong>{text('本次将执行', 'This operation will')}</strong><span>{onboardingMode === 'create' ? text('创建本地目录 → 初始化 Git main → 生成 .ba-agent/ → 登记项目', 'Create local directory → initialize Git main → generate .ba-agent/ → register project') : text('验证 Git 根目录 → 保留用户配置 → 补齐 .ba-agent/ → 登记项目', 'Verify Git root → preserve user configuration → complete .ba-agent/ → register project')}</span></div><footer><span>{onboardingMode === 'create' ? text('非空目录会被拒绝，不会覆盖其中的文件。', 'Non-empty directories are rejected and their files are never overwritten.') : text('必须选择仓库根目录，仓库内子目录会被拒绝。', 'Select the repository root; nested directories are rejected.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || !name.trim() || !rootPath.trim()}>{createMutation.isPending ? text('处理中…', 'Working…') : onboardingMode === 'create' ? text('创建并登记', 'Create and register') : text('导入并登记', 'Import and register')}</button></footer></form>}
     {milestoneFormOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMilestoneMutation.mutate() }}><header><span className="measure-label">MILESTONE DATUM</span><h3>{text('登记当前里程碑', 'Register current milestone')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={milestoneProjectId} onChange={(event) => setMilestoneProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('目标日期（可选）', 'Target date (optional)')}<input type="date" value={milestoneDueAt} onChange={(event) => setMilestoneDueAt(event.target.value)} /></label><label className="wide-field">{text('里程碑名称', 'Milestone name')}<input required value={milestoneName} onChange={(event) => setMilestoneName(event.target.value)} /></label><label className="wide-field">{text('结果与验收边界', 'Outcome and acceptance boundary')}<textarea value={milestoneDescription} onChange={(event) => setMilestoneDescription(event.target.value)} /></label></div><footer><span>{text('新登记项会成为项目当前活动里程碑；新任务默认归入该里程碑。', 'The new entry becomes the active milestone; new tasks default to it.')}</span><button className="field-action primary" type="submit" disabled={createMilestoneMutation.isPending}>{createMilestoneMutation.isPending ? text('登记中…', 'Registering…') : text('确认里程碑', 'Register milestone')}</button></footer></form>}
-    {feedback && <p className={clsx('operation-feedback', (createMutation.isError || createMilestoneMutation.isError) && 'is-error')} role="status">{feedback}</p>}
-    {data.projects.length === 0 ? <EmptyRegister titleZh="项目登记为空" titleEn="Project register is empty" detailZh="注册本地 Git 仓库后，这里会显示里程碑、健康度与收据链。" detailEn="Register a local Git repository to show milestones, health, and receipt chains here." /> : <div className="ruled-register" tabIndex={0} role="region" aria-label={text('项目控制点登记表', 'Project control-point register table')}><div className="register-head project-grid"><span>{text('控制点', 'Control point')}</span><span>{text('仓库 / 路径', 'Repository / path')}</span><span>{text('里程碑', 'Milestone')}</span><span>{text('健康', 'Health')}</span><span>{text('进度', 'Progress')}</span><span>{text('收据头', 'Receipt head')}</span></div>{data.projects.map((project, index) => <article className="register-row project-grid" key={project.id}><span className="control-cell"><i className="control-symbol" />CP-0{index + 1}</span><span><strong>{project.name}</strong><small className="mono">{project.path} · {project.branch}</small></span><span>{text(project.milestone, project.milestoneEn)}</span><span><StatusText status={project.health === 'blocked' ? 'blocked' : project.health === 'attention' ? 'review' : 'completed'} /></span><span><b className="mono">{project.progress}%</b><i className="linear-progress"><span style={{ width: `${project.progress}%` }} /></i></span><span className="mono">{project.receiptHead}</span></article>)}</div>}
+    {feedback && <div className={clsx('operation-feedback', (createMutation.isError || createMilestoneMutation.isError) && 'is-error')} role="status"><span>{feedback}</span>{showWorkflowNextStep && <Link to="/workflows">{text('创建第一个工作流任务', 'Create the first workflow task')}<ArrowRight size={14} aria-hidden="true" /></Link>}</div>}
+    {data.projects.length === 0 ? <EmptyRegister titleZh="项目登记为空" titleEn="Project register is empty" detailZh="使用上方引导导入已有 Git 仓库，或安全创建一个仅存在于本机的新项目。" detailEn="Use the guide above to import an existing Git repository or safely create a new local-only project." /> : <div className="ruled-register" tabIndex={0} role="region" aria-label={text('项目控制点登记表', 'Project control-point register table')}><div className="register-head project-grid"><span>{text('控制点', 'Control point')}</span><span>{text('仓库 / 路径', 'Repository / path')}</span><span>{text('里程碑', 'Milestone')}</span><span>{text('健康', 'Health')}</span><span>{text('进度', 'Progress')}</span><span>{text('收据头', 'Receipt head')}</span></div>{data.projects.map((project, index) => <article className="register-row project-grid" key={project.id}><span className="control-cell"><i className="control-symbol" />CP-0{index + 1}</span><span><strong>{project.name}</strong><small className="mono">{project.path} · {project.branch}</small></span><span>{text(project.milestone, project.milestoneEn)}</span><span><StatusText status={project.health === 'blocked' ? 'blocked' : project.health === 'attention' ? 'review' : 'completed'} /></span><span><b className="mono">{project.progress}%</b><i className="linear-progress"><span style={{ width: `${project.progress}%` }} /></i></span><span className="mono">{project.receiptHead}</span></article>)}</div>}
   </section>
 }
 

@@ -20,8 +20,9 @@ use serde_json::json;
 
 use crate::{
     ApprovalCoordinator, ApprovalResolution, DispatchCoordinator, FinalizationCoordinator,
-    GateCoordinator, GateDefinition, GateEligibility, GateRunner, RecoveryAction,
-    RecoveryCoordinator, RuntimeCoordinator, ScheduleBlocker, Scheduler, SchedulerConfig,
+    GateCoordinator, GateDefinition, GateEligibility, GateRunner, ProjectOnboardingMode,
+    ProjectOnboardingRequest, ProjectOnboardingService, RecoveryAction, RecoveryCoordinator,
+    RuntimeCoordinator, ScheduleBlocker, Scheduler, SchedulerConfig, SchedulerError,
     SchedulerPolicyService, configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
     evaluate_required_gates,
 };
@@ -112,6 +113,133 @@ fn task(project_id: &EntityId, title: &str, write: bool, paths: &[&str]) -> Task
 
 fn missing(message: &'static str) -> std::io::Error {
     std::io::Error::other(message)
+}
+
+#[test]
+fn project_onboarding_import_preserves_user_config_and_requires_the_git_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    run_git(directory.path(), &["init", "--initial-branch=main"])?;
+    let config_root = directory.path().join(".ba-agent");
+    std::fs::create_dir_all(&config_root)?;
+    let existing = "version = 9\nname = \"user-owned\"\ncustom = true\n";
+    std::fs::write(config_root.join("project.toml"), existing)?;
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let result =
+        ProjectOnboardingService::new(store.clone()).onboard(ProjectOnboardingRequest {
+            mode: ProjectOnboardingMode::Import,
+            path: directory.path().to_path_buf(),
+            name: Some("Imported repository".into()),
+            description: "Existing work".into(),
+            language: "en".into(),
+        })?;
+    assert!(!result.initialized_git);
+    assert!(!result.created_project_config);
+    assert_eq!(
+        std::fs::read_to_string(config_root.join("project.toml"))?,
+        existing
+    );
+    for child in ["workflows", "plans", "knowledge", "receipts"] {
+        assert!(config_root.join(child).is_dir());
+    }
+    let registered = store.list_projects()?;
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].id, result.project.id);
+
+    let nested = directory.path().join("nested");
+    std::fs::create_dir(&nested)?;
+    let error = ProjectOnboardingService::new(store).onboard(ProjectOnboardingRequest {
+        mode: ProjectOnboardingMode::Import,
+        path: nested,
+        name: None,
+        description: String::new(),
+        language: "zh-CN".into(),
+    });
+    assert!(matches!(
+        error,
+        Err(SchedulerError::InvalidProjectOnboarding(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn project_onboarding_creates_local_git_and_refuses_duplicate_registration()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("created-project");
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let service = ProjectOnboardingService::new(store.clone());
+    let result = service.onboard(ProjectOnboardingRequest {
+        mode: ProjectOnboardingMode::Create,
+        path: target.clone(),
+        name: Some("Created project".into()),
+        description: String::new(),
+        language: "en".into(),
+    })?;
+    assert!(result.created_directory);
+    assert!(result.initialized_git);
+    assert!(result.created_project_config);
+    assert!(target.join(".git").is_dir());
+    assert!(
+        std::fs::read_to_string(target.join(".ba-agent/project.toml"))?
+            .contains("language = \"en\"")
+    );
+
+    let duplicate = service.onboard(ProjectOnboardingRequest {
+        mode: ProjectOnboardingMode::Import,
+        path: target.clone(),
+        name: None,
+        description: String::new(),
+        language: "en".into(),
+    });
+    assert!(matches!(
+        duplicate,
+        Err(SchedulerError::ProjectAlreadyRegistered(_))
+    ));
+    assert_eq!(store.list_projects()?.len(), 1);
+
+    std::fs::remove_dir_all(&target)?;
+    let recreated_duplicate = service.onboard(ProjectOnboardingRequest {
+        mode: ProjectOnboardingMode::Create,
+        path: target.clone(),
+        name: None,
+        description: String::new(),
+        language: "en".into(),
+    });
+    assert!(matches!(
+        recreated_duplicate,
+        Err(SchedulerError::ProjectAlreadyRegistered(_))
+    ));
+    assert!(!target.exists());
+    Ok(())
+}
+
+#[test]
+fn project_onboarding_never_modifies_a_nonempty_create_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("occupied");
+    std::fs::create_dir(&target)?;
+    std::fs::write(target.join("keep.txt"), "owned by the user")?;
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let result = ProjectOnboardingService::new(store).onboard(ProjectOnboardingRequest {
+        mode: ProjectOnboardingMode::Create,
+        path: target.clone(),
+        name: None,
+        description: String::new(),
+        language: "zh-CN".into(),
+    });
+    assert!(matches!(
+        result,
+        Err(SchedulerError::ProjectDirectoryNotEmpty(_))
+    ));
+    assert_eq!(
+        std::fs::read_to_string(target.join("keep.txt"))?,
+        "owned by the user"
+    );
+    assert!(!target.join(".git").exists());
+    assert!(!target.join(".ba-agent").exists());
+    Ok(())
 }
 
 #[test]

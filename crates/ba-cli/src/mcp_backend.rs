@@ -8,7 +8,8 @@ use ba_mcp::{ToolBackend, ToolError};
 use ba_runtime::{ApprovalDecision, CodexAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    RuntimeCoordinator, SchedulerPolicyService, configured_gate,
+    ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService, RuntimeCoordinator,
+    SchedulerPolicyService, configured_gate,
 };
 use ba_store::SqliteStore;
 use serde_json::{Value, json};
@@ -69,6 +70,8 @@ impl StoreBackend {
                     }
                 }))
             }
+            "project.import" => self.onboard_project(arguments, ProjectOnboardingMode::Import),
+            "project.create" => self.onboard_project(arguments, ProjectOnboardingMode::Create),
             "workstream.list" => Ok(serde_json::to_value(
                 self.store
                     .list_workstreams(&required_id(arguments, "project_id")?)?,
@@ -222,6 +225,25 @@ impl StoreBackend {
         };
         self.store.upsert_task(&task)?;
         Ok(serde_json::to_value(task)?)
+    }
+
+    fn onboard_project(
+        &self,
+        arguments: &Value,
+        mode: ProjectOnboardingMode,
+    ) -> anyhow::Result<Value> {
+        let path = PathBuf::from(required_string(arguments, "path")?);
+        anyhow::ensure!(path.is_absolute(), "project path must be absolute");
+        let result = ProjectOnboardingService::new(self.store.clone()).onboard(
+            ProjectOnboardingRequest {
+                mode,
+                path,
+                name: optional_string(arguments, "name"),
+                description: optional_string(arguments, "description").unwrap_or_default(),
+                language: optional_string(arguments, "language").unwrap_or_else(|| "zh-CN".into()),
+            },
+        )?;
+        Ok(serde_json::to_value(result)?)
     }
 
     fn create_milestone(&self, arguments: &Value) -> anyhow::Result<Value> {
@@ -439,6 +461,15 @@ fn required_string<'a>(arguments: &'a Value, key: &str) -> anyhow::Result<&'a st
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .with_context(|| format!("missing or empty argument: {key}"))
+}
+
+fn optional_string(arguments: &Value, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 fn required_id(arguments: &Value, key: &str) -> anyhow::Result<EntityId> {

@@ -14,19 +14,32 @@ BA Agent 适合管理需要多个阶段、多个角色、代码隔离、人工�
 
 ## 第一次启动
 
-在项目根目录执行：
+先启动本地控制台：
 
 ```powershell
-ba-agent-control init "G:\你的仓库" --name "项目名称"
 ba-agent-control doctor
 ba-agent-control ui
 ```
 
 `ui` 只绑定 `127.0.0.1`，并打开带一次性会话令牌的本地控制台。后续再次运行同一命令会安全地重新打开已有服务。不要复制或分享启动 URL。
 
+进入“项目”后有两条安全路径：
+
+- “导入现有仓库”：要求填写现有 Git 仓库的根目录；保留已有 `.ba-agent/project.toml`，只补齐缺少的项目目录并注册到本机数据库。
+- “创建本地项目”：只接受尚不存在或完全为空的目录；初始化 `main` 分支和 `.ba-agent/` 后注册。非空目录会被拒绝，不会覆盖其中的文件。
+
+两种操作都只发生在本机，不会创建 GitHub 仓库、配置远程、push、打 tag 或发布。CLI 等价命令如下：
+
+```powershell
+ba-agent-control project import "G:\已有仓库" --name "已有项目"
+ba-agent-control project create "G:\全新项目" --name "新项目"
+```
+
+原有 `ba-agent-control init` 仍可用于导入现有仓库，并与 `project import` 共享同一套校验逻辑。
+
 ## 推荐的控制台流程
 
-1. 在“项目”确认仓库已经注册。
+1. 在“项目”导入现有 Git 仓库或创建全新的本地仓库，并确认注册成功。
 2. 在“工作流与任务”创建工作流、里程碑和任务。
 3. 为任务填写清晰的目标、验收条件和依赖。写任务必须声明仓库相对路径范围，例如 `apps/console/**`；只读调查不要声明写入范围。
 4. 将任务从 `draft` 调整到 `ready`，选择系统推荐的 Agent 角色并派发。

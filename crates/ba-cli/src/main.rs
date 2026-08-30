@@ -80,6 +80,26 @@ enum ProjectCommand {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Initialize BA Agent metadata and import an existing local Git root.
+    Import {
+        path: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long, default_value = "zh-CN")]
+        language: String,
+    },
+    /// Create a local directory, initialize Git and BA Agent metadata, and register it.
+    Create {
+        path: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long, default_value = "zh-CN")]
+        language: String,
+    },
     /// List registered projects.
     List,
     /// Show one project by ULID.
@@ -418,6 +438,39 @@ mod tests {
                 command: Some(DispatchCommand::Global { maximum: 6 }),
                 ..
             })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn project_onboarding_commands_distinguish_import_and_local_create() -> anyhow::Result<()> {
+        let imported = Cli::try_parse_from([
+            "ba-agent-control",
+            "project",
+            "import",
+            "G:/existing",
+            "--name",
+            "Existing",
+        ])?;
+        assert!(matches!(
+            imported.command,
+            Command::Project(ProjectArgs {
+                command: ProjectCommand::Import { name: Some(name), .. }
+            }) if name == "Existing"
+        ));
+        let created = Cli::try_parse_from([
+            "ba-agent-control",
+            "project",
+            "create",
+            "G:/new-project",
+            "--language",
+            "en",
+        ])?;
+        assert!(matches!(
+            created.command,
+            Command::Project(ProjectArgs {
+                command: ProjectCommand::Create { language, .. }
+            }) if language == "en"
         ));
         Ok(())
     }

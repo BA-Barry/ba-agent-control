@@ -6,7 +6,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 
 ## What works in this Alpha
 
-- Register local projects and organize workstreams, milestones, and dependent tasks.
+- Import an existing local Git repository or safely create a new local repository, then organize workstreams, milestones, and dependent tasks.
 - Dispatch Codex-backed runs with capability detection and structured event capture.
 - Share a durable global run pool across projects (default four), apply project-specific caps, and automatically start queued work in dependency/submission order while serializing overlapping writers.
 - Isolate writes in Git worktrees and protect path scopes.
@@ -34,6 +34,8 @@ cargo run -p ba-agent-control -- ui
 The UI server binds to `127.0.0.1` only and prints a one-time session URL. Runtime data is stored in the operating system's application-data directory; repository-owned configuration is under `.ba-agent/`.
 Running `ui` again while the default local service is alive safely reuses and reopens that authenticated service instead of starting a duplicate process.
 `doctor --json` reports `controlService.status` as `running`, `stopped`, or `stale`. An invalid one-time launch link shows a local recovery page with the exact command to reopen the console; it never guesses or persists the rejected credential.
+
+On the **项目 / Projects** page, choose **导入现有仓库** to register an existing Git root without replacing its `.ba-agent/project.toml`, or **创建本地项目** to initialize a missing or empty directory on `main` and create the `.ba-agent/` structure. Neither path creates a GitHub repository, remote, push, tag, or release. The same operations are available as `project import` and `project create`.
 
 Queue and concurrency controls are available in the console under **工作流与任务** and **设置与适配器**, or from the CLI:
 

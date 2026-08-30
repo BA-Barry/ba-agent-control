@@ -631,6 +631,24 @@ export function createProject(input: {
   return mutate<{ id: string }>('/api/v1/projects', csrfToken, input)
 }
 
+export interface ProjectOnboardingResult {
+  project: { id: string; name: string; root_path: string }
+  mode: 'import' | 'create'
+  createdDirectory: boolean
+  initializedGit: boolean
+  createdProjectConfig: boolean
+}
+
+export function onboardProject(input: {
+  mode: 'import' | 'create'
+  path: string
+  name: string
+  description: string
+  language: 'zh-CN' | 'en'
+}, csrfToken: string) {
+  return mutate<ProjectOnboardingResult>('/api/v1/projects/onboard', csrfToken, input)
+}
+
 export function createWorkstream(input: {
   projectId: string
   name: string

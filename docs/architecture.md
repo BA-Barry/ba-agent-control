@@ -46,6 +46,8 @@ Repository-owned artifacts live under `.ba-agent/` and may be version controlled
 
 Detailed logs, worktrees, lock files, session tokens, and transient adapter state never enter the project repository.
 
+Project onboarding is a shared scheduler service used by CLI, REST, MCP, and the console. Import mode accepts only the exact root of an existing Git repository and preserves an existing project configuration. Create mode accepts only a missing or empty directory, initializes a local `main` repository, and creates the repository-owned directories. Duplicate canonical roots, nested repository paths, and non-empty create targets are rejected. Rollback removes only artifacts created by the failed create operation; onboarding never creates a remote or performs a push.
+
 ## Execution model
 
 A Task is schedulable only when dependencies are satisfied, approvals are clear, and its declared path scope does not conflict with a running writer. All projects share a durable global pool whose default maximum is four. Each project may request a lower cap in `.ba-agent/project.toml`; the effective cap is the lesser of the project and global values. An eligible overflow dispatch remains durably queued instead of being rejected. Admission claims run inside an immediate SQLite transaction, so concurrent BA Agent control processes cannot overclaim a slot. The queue follows dependency satisfaction and user-controlled submission order, can be reordered or cancelled, and is drained again after terminal runs, cancellations, dependency completion, or policy changes.

@@ -32,7 +32,8 @@ use ba_github::{GitHubAdapter, GitHubError};
 use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    RecoveryAction, RecoveryCoordinator, RuntimeCoordinator, SchedulerPolicyService,
+    ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService, RecoveryAction,
+    RecoveryCoordinator, RuntimeCoordinator, SchedulerError, SchedulerPolicyService,
     configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
@@ -437,6 +438,7 @@ pub fn router(state: AppState) -> Router {
         .route("/session", get(session_info))
         .route("/overview", get(overview))
         .route("/projects", get(list_projects).post(create_project))
+        .route("/projects/onboard", post(onboard_project))
         .route("/projects/{id}", get(get_project))
         .route("/worktrees", get(list_worktrees))
         .route("/agent-profiles", get(list_agent_profiles))
@@ -712,6 +714,46 @@ async fn create_project(
     };
     state.store.upsert_project(&project)?;
     Ok((StatusCode::CREATED, Json(project)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardProject {
+    mode: ProjectOnboardingMode,
+    path: PathBuf,
+    name: Option<String>,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_language")]
+    language: String,
+}
+
+async fn onboard_project(
+    State(state): State<AppState>,
+    Json(input): Json<OnboardProject>,
+) -> Result<(StatusCode, Json<ba_scheduler::ProjectOnboardingResult>), ApiError> {
+    if !input.path.is_absolute() {
+        return Err(ApiError::bad_request("project path must be absolute"));
+    }
+    let result = ProjectOnboardingService::new(state.store.clone())
+        .onboard(ProjectOnboardingRequest {
+            mode: input.mode,
+            path: input.path,
+            name: input.name,
+            description: input.description,
+            language: input.language,
+        })
+        .map_err(project_onboarding_error)?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+fn project_onboarding_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::ProjectAlreadyRegistered(_)
+        | SchedulerError::ProjectDirectoryNotEmpty(_) => ApiError::conflict(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_request(error.to_string()),
+    }
 }
 
 async fn get_project(
@@ -2351,6 +2393,48 @@ mod tests {
             )
             .await?;
         assert_eq!(allowed.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_onboarding_endpoint_creates_a_local_only_repository() -> anyhow::Result<()> {
+        let state = state()?;
+        let parent = tempdir()?;
+        let target = parent.path().join("guided-project");
+        let (status, Json(result)) = onboard_project(
+            State(state.clone()),
+            Json(OnboardProject {
+                mode: ProjectOnboardingMode::Create,
+                path: target.clone(),
+                name: Some("Guided project".into()),
+                description: "Created from the local console".into(),
+                language: "en".into(),
+            }),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(result.created_directory);
+        assert!(result.initialized_git);
+        assert!(result.created_project_config);
+        assert!(target.join(".git").is_dir());
+        assert!(target.join(".ba-agent/project.toml").is_file());
+        assert_eq!(state.store.list_projects()?.len(), 1);
+
+        let duplicate = onboard_project(
+            State(state),
+            Json(OnboardProject {
+                mode: ProjectOnboardingMode::Import,
+                path: target,
+                name: None,
+                description: String::new(),
+                language: "en".into(),
+            }),
+        )
+        .await;
+        let Err(error) = duplicate else {
+            anyhow::bail!("duplicate project registration unexpectedly succeeded");
+        };
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
         Ok(())
     }
 

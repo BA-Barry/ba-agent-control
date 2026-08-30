@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
+import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -217,4 +217,28 @@ test('sends durable queue and concurrency mutations through the protected API', 
   expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/dispatches/01DISPATCH2/cancel', expect.objectContaining({ method: 'POST' }))
   expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ maxConcurrency: 6 })
   expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/scheduler/projects/01PROJECT', expect.objectContaining({ method: 'POST' }))
+})
+
+test('sends local-only project onboarding intent through the protected API', async () => {
+  const fetchMock = vi.fn().mockImplementation(() => json({
+    project: { id: '01PROJECT', name: 'Created', root_path: 'G:\\Created' },
+    mode: 'create',
+    createdDirectory: true,
+    initializedGit: true,
+    createdProjectConfig: true,
+  }, 201))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await onboardProject({
+    mode: 'create', path: 'G:\\Created', name: 'Created', description: '', language: 'zh-CN',
+  }, 'csrf-token')
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects/onboard', expect.objectContaining({
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: expect.objectContaining({ 'x-ba-csrf-token': 'csrf-token' }),
+  }))
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+    mode: 'create', path: 'G:\\Created', name: 'Created', description: '', language: 'zh-CN',
+  })
 })

@@ -2,6 +2,10 @@
 
 This backlog records product gaps observed during the personal Alpha acceptance and first-use walkthrough. It is intentionally outcome-oriented: entries describe a user-visible failure or missing capability rather than creating new release gates.
 
+## Iteration progress: project onboarding
+
+**Progress (2026-08-30): complete locally.** The Projects surface now distinguishes importing an existing Git root from creating a new local repository. Both paths use one application service across the console, CLI, REST API, and MCP. Existing project configuration is preserved during import; create mode refuses non-empty directories and rolls back only its own artifacts on failure. The flow explicitly stops at local registration and does not create a GitHub repository, remote, push, tag, or release.
+
 ## Next iteration: complete the daily task loop
 
 ### 1. Make roles usable from the console
