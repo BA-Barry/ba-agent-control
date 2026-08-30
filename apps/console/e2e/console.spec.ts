@@ -249,6 +249,7 @@ async function mockLongRunApi(page: Page, withQueue = false) {
         write: true,
         path_scope: ['apps/console/**'],
         depends_on: [],
+        agent_profile_id: '01PROFILE',
         created_at: now,
         updated_at: now,
       }, {
@@ -311,6 +312,53 @@ async function mockLongRunApi(page: Page, withQueue = false) {
     }
     if (path === '/api/v1/gates' || path === '/api/v1/receipts') {
       await json(route, [])
+      return
+    }
+    if (path === '/api/v1/workflow-templates' && route.request().method() === 'GET') {
+      await json(route, { templates: [{
+        version: 1,
+        id: 'feature-delivery',
+        name_zh: '功能交付',
+        name_en: 'Feature delivery',
+        description_zh: '从调查、实现到测试和审查的完整交付链。',
+        description_en: 'A complete delivery chain from exploration through review.',
+        origin: 'builtin',
+        tasks: [
+          { key: 'explore', title_zh: '调查现有实现', title_en: 'Explore implementation', role: 'explorer', write: false, depends_on: [], path_scope: [], acceptance_zh: ['定位路径'], acceptance_en: ['Locate paths'] },
+          { key: 'implement', title_zh: '实现功能切片', title_en: 'Implement feature slice', role: 'implementer', write: true, depends_on: ['explore'], path_scope: ['$WRITE_SCOPE'], acceptance_zh: ['完成实现'], acceptance_en: ['Complete implementation'] },
+          { key: 'review', title_zh: '独立审查', title_en: 'Independent review', role: 'reviewer', write: false, depends_on: ['implement'], path_scope: [], acceptance_zh: ['确认验收'], acceptance_en: ['Confirm acceptance'] },
+        ],
+      }, {
+        version: 1,
+        id: 'security-review',
+        name_zh: '安全审查',
+        name_en: 'Security review',
+        description_zh: '威胁建模与权限核验。',
+        description_en: 'Threat modeling and authorization verification.',
+        origin: 'builtin',
+        tasks: [{ key: 'review', title_zh: '安全审查', title_en: 'Security review', role: 'security_reviewer', write: false, depends_on: [], path_scope: [], acceptance_zh: ['报告风险'], acceptance_en: ['Report risk'] }],
+      }], diagnostics: [] })
+      return
+    }
+    if (path === '/api/v1/workflow-instances' && route.request().method() === 'POST') {
+      await json(route, { templateId: 'feature-delivery', workstream: { id: '01TEMPLATEWORKSTREAM' }, tasks: [{ id: '01TEMPLATETASK1' }, { id: '01TEMPLATETASK2' }, { id: '01TEMPLATETASK3' }] }, 201)
+      return
+    }
+    if (path === '/api/v1/workflow-templates/materialize' && route.request().method() === 'POST') {
+      await json(route, { path: 'G:/work/.ba-agent/workflows/feature-delivery.toml' }, 201)
+      return
+    }
+    if (path === '/api/v1/handoffs' && route.request().method() === 'GET') {
+      const direction = new URL(route.request().url()).searchParams.get('direction')
+      await json(route, direction === 'incoming' ? [{
+        handoff: {
+          id: '01HANDOFF000000000000000001', projectId, sourceTaskId: taskId, sourceRunId: runId,
+          destinationTaskIds: [draftTaskId], outcome: '已定位调度器写入边界并完成复现。', decisions: [],
+          evidence: ['cargo test -p ba-scheduler 通过'], changedPaths: ['crates/ba-scheduler/src/dispatch.rs'], commands: [],
+          risks: ['Windows 文件锁仍需覆盖'], nextSteps: ['在独立 worktree 实现范围锁'], artifactIds: [], receiptIds: [], createdAt: now,
+        },
+        artifact: { id: '01HANDOFF000000000000000001', path: '.ba-agent/knowledge/handoffs/01HANDOFF.json', digest: 'abcdef1234567890abcdef1234567890' },
+      }] : [])
       return
     }
     if (path === '/api/v1/dispatches' && route.request().method() === 'POST') {
@@ -473,6 +521,40 @@ test('a live task draft preserves milestone and dependency associations', async 
     dependsOn: ['01LONGTASK000000000000000001'],
   })
   await expect(page.getByRole('status').filter({ hasText: '任务草稿已创建' })).toBeVisible()
+  await expectNoA11yViolations(page)
+})
+
+test('a workflow template creates an assigned dependency chain without hiding its write boundary', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/workflows')
+  await page.getByRole('button', { name: '从模板创建' }).click()
+  await expect(page.getByRole('radio', { name: /功能交付/ })).toBeVisible()
+  await page.getByLabel('共享写入范围（逗号或换行分隔）').fill('crates/ba-scheduler/**\napps/console/**')
+  const requestPromise = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/workflow-instances')
+  await page.getByRole('button', { name: '创建任务链' }).click()
+  expect((await requestPromise).postDataJSON()).toMatchObject({
+    templateId: 'feature-delivery',
+    milestoneId: '01MILESTONE',
+    writeScope: ['crates/ba-scheduler/**', 'apps/console/**'],
+  })
+  await expect(page.getByRole('status').filter({ hasText: '已创建工作流及 3 个带角色任务' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('verified handoff evidence remains readable on a narrow workflow register', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await seedSettings(page, 'zh', 'dark', 'signalroom')
+  await mockLongRunApi(page)
+  await page.goto('/workflows')
+  const row = page.getByRole('row').filter({ hasText: '实现写入范围隔离' })
+  await row.getByRole('button', { name: '交接' }).click()
+  await expect(page.getByText('已定位调度器写入边界并完成复现。')).toBeVisible()
+  await expect(page.getByText('cargo test -p ba-scheduler 通过')).toBeVisible()
+  await expect(page.getByText(/SHA-256 abcdef123456/)).toBeVisible()
+  await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })
 

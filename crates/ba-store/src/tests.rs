@@ -35,6 +35,7 @@ fn task(project_id: EntityId) -> Task {
         write: true,
         path_scope: vec!["crates/ba-store".to_owned()],
         depends_on: Vec::new(),
+        agent_profile_id: None,
         created_at: time,
         updated_at: time,
     }
@@ -143,7 +144,7 @@ fn open_temp() -> Result<(TempDir, SqliteStore), Box<dyn std::error::Error>> {
 #[test]
 fn migrates_and_round_trips_entities() -> Result<(), Box<dyn std::error::Error>> {
     let (_temp, store) = open_temp()?;
-    assert_eq!(store.schema_version()?, 2);
+    assert_eq!(store.schema_version()?, 3);
     let project = project();
     let task = task(project.id.clone());
     store.upsert_project(&project)?;
@@ -237,6 +238,39 @@ fn workstream_and_first_task_creation_rolls_back_as_one_unit()
             .is_err()
     );
     assert!(store.list_workstreams(&project.id)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn workflow_instance_rolls_back_every_task_when_one_assignment_is_invalid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp, store) = open_temp()?;
+    let project = project();
+    store.upsert_project(&project)?;
+    let stamp = now();
+    let workstream = Workstream {
+        id: EntityId::new(),
+        project_id: project.id.clone(),
+        name: "Assigned workflow".into(),
+        description: String::new(),
+        status: "active".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    let mut first = task(project.id.clone());
+    first.workstream_id = Some(workstream.id.clone());
+    let mut invalid = task(project.id.clone());
+    invalid.workstream_id = Some(workstream.id.clone());
+    invalid.depends_on = vec![first.id.clone()];
+    invalid.agent_profile_id = Some(EntityId::new());
+
+    assert!(
+        store
+            .create_workflow_instance(&workstream, &[first, invalid])
+            .is_err()
+    );
+    assert!(store.list_workstreams(&project.id)?.is_empty());
+    assert!(store.list_tasks(&project.id)?.is_empty());
     Ok(())
 }
 
@@ -381,6 +415,7 @@ fn artifact_and_receipt_are_recorded_atomically() -> Result<(), Box<dyn std::err
         kind: "runtime_state_import".into(),
         path: ".ba-agent/imports/runtime-state/claude/state.json".into(),
         digest: Some("abc123".into()),
+        metadata: serde_json::Value::Null,
         created_at: now(),
     };
     let receipt = store.record_artifact_with_receipt(

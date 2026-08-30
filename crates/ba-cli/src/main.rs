@@ -123,6 +123,24 @@ enum WorkstreamCommand {
     },
     /// List a project's workstreams.
     List { project_id: String },
+    /// List built-in templates and project-local overrides.
+    Templates { project_id: String },
+    /// Copy one built-in template into `.ba-agent/workflows/` for editing.
+    Materialize {
+        project_id: String,
+        template_id: String,
+    },
+    /// Instantiate a template as one atomic assigned task graph.
+    Instantiate {
+        project_id: String,
+        template_id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        milestone_id: Option<String>,
+        #[arg(long = "scope")]
+        write_scope: Vec<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -149,11 +167,45 @@ enum TaskCommand {
         write: bool,
         #[arg(long = "scope")]
         path_scope: Vec<String>,
+        #[arg(long)]
+        agent_profile_id: Option<String>,
     },
     /// List a project's tasks.
     List { project_id: String },
     /// Transition a task through its validated lifecycle.
     Status { id: String, status: String },
+    /// Persist a structured handoff for directly dependent downstream tasks.
+    HandoffCreate {
+        source_task_id: String,
+        #[arg(long)]
+        source_run_id: Option<String>,
+        #[arg(long = "to", required = true)]
+        destination_task_ids: Vec<String>,
+        #[arg(long)]
+        outcome: String,
+        #[arg(long = "decision")]
+        decisions: Vec<String>,
+        #[arg(long = "evidence")]
+        evidence: Vec<String>,
+        #[arg(long = "changed-path")]
+        changed_paths: Vec<String>,
+        #[arg(long = "command-evidence")]
+        command_evidence: Vec<String>,
+        #[arg(long = "risk")]
+        risks: Vec<String>,
+        #[arg(long = "next-step")]
+        next_steps: Vec<String>,
+        #[arg(long = "artifact-id")]
+        artifact_ids: Vec<String>,
+        #[arg(long = "receipt-id")]
+        receipt_ids: Vec<String>,
+    },
+    /// List incoming or outgoing structured handoffs for one task.
+    HandoffList {
+        task_id: String,
+        #[arg(long)]
+        outgoing: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -471,6 +523,43 @@ mod tests {
             Command::Project(ProjectArgs {
                 command: ProjectCommand::Create { language, .. }
             }) if language == "en"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn workflow_template_and_handoff_commands_keep_assignments_explicit() -> anyhow::Result<()> {
+        let workflow = Cli::try_parse_from([
+            "ba-agent-control",
+            "workstream",
+            "instantiate",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "feature-delivery",
+            "--scope",
+            "crates/auth",
+        ])?;
+        assert!(matches!(
+            workflow.command,
+            Command::Workstream(WorkstreamArgs {
+                command: WorkstreamCommand::Instantiate { template_id, write_scope, .. }
+            }) if template_id == "feature-delivery" && write_scope == ["crates/auth"]
+        ));
+
+        let handoff = Cli::try_parse_from([
+            "ba-agent-control",
+            "task",
+            "handoff-create",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--to",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+            "--outcome",
+            "Root cause confirmed",
+        ])?;
+        assert!(matches!(
+            handoff.command,
+            Command::Task(TaskArgs {
+                command: TaskCommand::HandoffCreate { outcome, destination_task_ids, .. }
+            }) if outcome == "Root cause confirmed" && destination_task_ids.len() == 1
         ));
         Ok(())
     }

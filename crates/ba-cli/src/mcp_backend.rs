@@ -8,8 +8,9 @@ use ba_mcp::{ToolBackend, ToolError};
 use ba_runtime::{ApprovalDecision, CodexAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService, RuntimeCoordinator,
-    SchedulerPolicyService, configured_gate,
+    HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
+    ProjectOnboardingRequest, ProjectOnboardingService, RuntimeCoordinator, SchedulerPolicyService,
+    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
 };
 use ba_store::SqliteStore;
 use serde_json::{Value, json};
@@ -76,6 +77,17 @@ impl StoreBackend {
                 self.store
                     .list_workstreams(&required_id(arguments, "project_id")?)?,
             )?),
+            "workflow-template.list" => Ok(serde_json::to_value(
+                WorkflowTemplateService::new(self.store.clone())
+                    .catalog(&required_id(arguments, "project_id")?)?,
+            )?),
+            "workflow-template.materialize" => Ok(json!({
+                "path": WorkflowTemplateService::new(self.store.clone()).materialize(
+                    &required_id(arguments, "project_id")?,
+                    required_string(arguments, "template_id")?,
+                )?
+            })),
+            "workflow.instantiate" => self.instantiate_workflow(arguments),
             "milestone.list" => Ok(serde_json::to_value(
                 self.store
                     .list_milestones(&required_id(arguments, "project_id")?)?,
@@ -96,6 +108,13 @@ impl StoreBackend {
                 Ok(serde_json::to_value(tasks)?)
             }
             "task.create" => self.create_task(arguments),
+            "handoff.create" => self.create_handoff(arguments),
+            "handoff.list" => self.list_handoffs(arguments),
+            "handoff.get" => Ok(serde_json::to_value(
+                HandoffService::new(self.store.clone())
+                    .get(&required_id(arguments, "handoff_id")?)?
+                    .context("handoff not found")?,
+            )?),
             "task.transition" => {
                 let id = required_id(arguments, "task_id")?;
                 let status = TaskStatus::from_str(required_string(arguments, "status")?)?;
@@ -204,6 +223,16 @@ impl StoreBackend {
                 anyhow::bail!("dependency task belongs to a different project");
             }
         }
+        let agent_profile_id = optional_id(arguments, "agent_profile_id")?;
+        if let Some(profile_id) = &agent_profile_id {
+            let profile = self
+                .store
+                .get_agent_profile(profile_id)?
+                .context("agent profile not found")?;
+            if write && profile.config["sandboxMode"] != "workspace-write" {
+                anyhow::bail!("assigned agent profile cannot execute write tasks");
+            }
+        }
         let stamp = now();
         let task = Task {
             id: EntityId::new(),
@@ -220,11 +249,62 @@ impl StoreBackend {
             write,
             path_scope,
             depends_on,
+            agent_profile_id,
             created_at: stamp,
             updated_at: stamp,
         };
         self.store.upsert_task(&task)?;
         Ok(serde_json::to_value(task)?)
+    }
+
+    fn instantiate_workflow(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let result = WorkflowTemplateService::new(self.store.clone()).instantiate(
+            &WorkflowInstantiationRequest {
+                project_id: required_id(arguments, "project_id")?,
+                template_id: required_string(arguments, "template_id")?.into(),
+                workstream_name: optional_string(arguments, "workstream_name"),
+                milestone_id: optional_id(arguments, "milestone_id")?,
+                write_scope: optional_string_array(arguments, "write_scope")?,
+            },
+        )?;
+        Ok(serde_json::to_value(result)?)
+    }
+
+    fn create_handoff(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let commands = arguments
+            .get("commands")
+            .cloned()
+            .map(serde_json::from_value::<Vec<HandoffCommandEvidence>>)
+            .transpose()?
+            .unwrap_or_default();
+        let result = HandoffService::new(self.store.clone()).create(HandoffDraft {
+            source_task_id: required_id(arguments, "source_task_id")?,
+            source_run_id: optional_id(arguments, "source_run_id")?,
+            destination_task_ids: required_id_array(arguments, "destination_task_ids")?,
+            outcome: required_string(arguments, "outcome")?.into(),
+            decisions: optional_string_array(arguments, "decisions")?,
+            evidence: optional_string_array(arguments, "evidence")?,
+            changed_paths: optional_string_array(arguments, "changed_paths")?,
+            commands,
+            risks: optional_string_array(arguments, "risks")?,
+            next_steps: optional_string_array(arguments, "next_steps")?,
+            artifact_ids: optional_id_array(arguments, "artifact_ids")?,
+            receipt_ids: optional_id_array(arguments, "receipt_ids")?,
+        })?;
+        Ok(serde_json::to_value(result)?)
+    }
+
+    fn list_handoffs(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let task_id = required_id(arguments, "task_id")?;
+        let direction =
+            optional_string(arguments, "direction").unwrap_or_else(|| "incoming".into());
+        let service = HandoffService::new(self.store.clone());
+        let records = match direction.as_str() {
+            "incoming" => service.list_for_task(&task_id)?,
+            "outgoing" => service.list_from_task(&task_id)?,
+            _ => anyhow::bail!("direction must be incoming or outgoing"),
+        };
+        Ok(serde_json::to_value(records)?)
     }
 
     fn onboard_project(
@@ -297,11 +377,11 @@ impl StoreBackend {
 
     async fn create_dispatch(&self, arguments: &Value) -> anyhow::Result<Value> {
         let task_id = required_id(arguments, "task_id")?;
-        let profile_id = required_id(arguments, "agent_profile_id")?;
+        let profile_id = optional_id(arguments, "agent_profile_id")?;
         let bundle = DispatchCoordinator::new(self.store.clone(), self.worktree_root.clone())
             .enqueue_with_prompt(
                 &task_id,
-                Some(&profile_id),
+                profile_id.as_ref(),
                 arguments
                     .get("prompt")
                     .and_then(Value::as_str)
@@ -491,6 +571,14 @@ fn required_id_array(arguments: &Value, key: &str) -> anyhow::Result<Vec<EntityI
         .collect()
 }
 
+fn optional_id_array(arguments: &Value, key: &str) -> anyhow::Result<Vec<EntityId>> {
+    if arguments.get(key).is_none() {
+        Ok(Vec::new())
+    } else {
+        required_id_array(arguments, key)
+    }
+}
+
 fn required_usize(arguments: &Value, key: &str) -> anyhow::Result<usize> {
     let value = arguments
         .get(key)
@@ -578,6 +666,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };
@@ -636,6 +725,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };
@@ -685,6 +775,71 @@ mod tests {
         assert_eq!(task["path_scope"], json!(["apps/console/**"]));
         assert_eq!(task["depends_on"], json!([dependency.id]));
         assert_eq!(task["milestone_id"], created["id"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workflow_and_handoff_tools_share_the_persisted_task_graph() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        std::fs::create_dir_all(directory.path().join(".ba-agent/workflows"))?;
+        let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "MCP workflow fixture".into(),
+            root_path: directory.path().to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        store.upsert_project(&project)?;
+        ba_scheduler::ensure_builtin_agent_profiles(&store)?;
+        let backend = StoreBackend {
+            control: RuntimeCoordinator::new(store.clone(), Arc::new(CodexAdapter::default())),
+            store,
+            worktree_root: directory.path().join("worktrees"),
+        };
+
+        let catalog = backend
+            .call_inner("workflow-template.list", &json!({"project_id": project.id}))
+            .await?;
+        assert_eq!(catalog["templates"].as_array().map(Vec::len), Some(6));
+        let instance = backend
+            .call_inner(
+                "workflow.instantiate",
+                &json!({
+                    "project_id": project.id,
+                    "template_id": "feature-delivery",
+                    "write_scope": ["crates/ba-scheduler/**"]
+                }),
+            )
+            .await?;
+        let tasks = instance["tasks"].as_array().context("tasks missing")?;
+        assert_eq!(tasks.len(), 6);
+        assert!(tasks.iter().all(|task| !task["agent_profile_id"].is_null()));
+
+        let handoff = backend
+            .call_inner(
+                "handoff.create",
+                &json!({
+                    "source_task_id": tasks[0]["id"],
+                    "destination_task_ids": [tasks[1]["id"]],
+                    "outcome": "Exploration completed",
+                    "evidence": ["Located the scheduler entry point"],
+                    "next_steps": ["Use the declared write scope"]
+                }),
+            )
+            .await?;
+        assert_eq!(handoff["handoff"]["id"], handoff["artifact"]["id"]);
+        let incoming = backend
+            .call_inner(
+                "handoff.list",
+                &json!({"task_id": tasks[1]["id"], "direction": "incoming"}),
+            )
+            .await?;
+        assert_eq!(incoming.as_array().map(Vec::len), Some(1));
+        assert_eq!(incoming[0]["handoff"]["outcome"], "Exploration completed");
         Ok(())
     }
 }

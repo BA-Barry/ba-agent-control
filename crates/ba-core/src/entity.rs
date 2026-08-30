@@ -62,6 +62,9 @@ pub struct Task {
     pub path_scope: Vec<String>,
     #[serde(default)]
     pub depends_on: Vec<EntityId>,
+    /// Durable role assignment selected during planning or template instantiation.
+    #[serde(default)]
+    pub agent_profile_id: Option<EntityId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -163,6 +166,9 @@ pub struct Artifact {
     pub kind: String,
     pub path: String,
     pub digest: Option<String>,
+    /// Structured, kind-specific metadata. Artifact bytes remain in the referenced file.
+    #[serde(default)]
+    pub metadata: Value,
     pub created_at: Timestamp,
 }
 

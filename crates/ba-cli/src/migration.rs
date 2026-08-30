@@ -513,6 +513,7 @@ fn persist_runtime_snapshot(
         kind: "runtime_state_import".into(),
         path: relative_path.to_string_lossy().replace('\\', "/"),
         digest: Some(digest.to_owned()),
+        metadata: serde_json::Value::Null,
         created_at: now(),
     };
     let recorded = store.record_artifact_with_receipt(
@@ -877,6 +878,7 @@ mod tests {
             kind: "runtime_state_import".into(),
             path: ".ba-agent/imports/runtime-state/claude/other.json".into(),
             digest: Some("digest".into()),
+            metadata: serde_json::Value::Null,
             created_at: now(),
         };
         let result = reconcile_existing_runtime_snapshot(

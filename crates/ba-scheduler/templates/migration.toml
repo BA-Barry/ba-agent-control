@@ -1,0 +1,72 @@
+version = 1
+id = "migration"
+name_zh = "迁移与兼容性改造"
+name_en = "Migration and compatibility change"
+description_zh = "盘点旧状态、设计迁移与回滚、实现转换、验证兼容性并核对文档。"
+description_en = "Inventory legacy state, design migration and rollback, implement conversion, verify compatibility, and audit documentation."
+
+[[tasks]]
+key = "inventory"
+title_zh = "盘点现状、数据和兼容性约束"
+title_en = "Inventory current state, data, and compatibility constraints"
+role = "explorer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["定位所有读写路径和版本边界", "列出不可逆步骤与真实样本"]
+acceptance_en = ["Locate all read/write paths and version boundaries", "List irreversible steps and real fixtures"]
+
+[[tasks]]
+key = "design"
+title_zh = "设计迁移、回滚与恢复"
+title_en = "Design migration, rollback, and recovery"
+role = "planner"
+write = false
+depends_on = ["inventory"]
+path_scope = []
+acceptance_zh = ["定义前向、回滚和重复执行语义", "明确备份、失败恢复和兼容窗口"]
+acceptance_en = ["Define forward, rollback, and repeat-run semantics", "Define backup, failure recovery, and compatibility windows"]
+
+[[tasks]]
+key = "implement"
+title_zh = "实现迁移和兼容层"
+title_en = "Implement migration and compatibility layer"
+role = "implementer"
+write = true
+depends_on = ["design"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["迁移可重复且失败不会留下半状态", "旧数据或配置按设计兼容"]
+acceptance_en = ["Migration is repeatable and leaves no partial state on failure", "Legacy data or configuration remains compatible as designed"]
+
+[[tasks]]
+key = "verify"
+title_zh = "验证升级、回滚和异常恢复"
+title_en = "Verify upgrade, rollback, and failure recovery"
+role = "test_engineer"
+write = true
+depends_on = ["implement"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["使用真实或等价样本验证升级", "验证中断、重试、回滚和数据保留"]
+acceptance_en = ["Verify upgrade with real or equivalent fixtures", "Verify interruption, retry, rollback, and data retention"]
+
+[[tasks]]
+key = "review"
+title_zh = "审查迁移完整性"
+title_en = "Review migration completeness"
+role = "reviewer"
+write = false
+depends_on = ["verify"]
+path_scope = []
+acceptance_zh = ["核对实现与迁移设计一致", "报告数据丢失或不兼容风险"]
+acceptance_en = ["Confirm implementation matches the migration design", "Report data-loss or incompatibility risks"]
+
+[[tasks]]
+key = "docs"
+title_zh = "核验升级与回滚说明"
+title_en = "Verify upgrade and rollback guidance"
+role = "docs_reviewer"
+write = false
+depends_on = ["review"]
+path_scope = []
+acceptance_zh = ["命令和版本路径可复现", "备份、回滚和恢复限制清楚可见"]
+acceptance_en = ["Commands and version paths are reproducible", "Backup, rollback, and recovery limits are explicit"]

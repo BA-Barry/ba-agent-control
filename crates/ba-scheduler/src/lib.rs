@@ -8,12 +8,14 @@ mod approval;
 mod dispatch;
 mod finalize;
 mod gate;
+mod handoff;
 mod onboarding;
 mod planner;
 mod policy;
 mod profiles;
 mod recovery;
 mod runtime_control;
+mod workflow;
 
 pub use approval::{ApprovalCoordinator, ApprovalResolution};
 pub use dispatch::{DispatchBundle, DispatchCoordinator};
@@ -21,6 +23,9 @@ pub use finalize::{FinalizationCoordinator, FinalizationResult};
 pub use gate::{
     GateCoordinator, GateDefinition, GateEligibility, GateExecution, GateRunner, configured_gate,
     configured_gate_names, evaluate_required_gates,
+};
+pub use handoff::{
+    HandoffArtifact, HandoffCommandEvidence, HandoffDraft, HandoffRecord, HandoffService,
 };
 pub use onboarding::{
     ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingResult,
@@ -36,6 +41,11 @@ pub use policy::{
 pub use profiles::ensure_builtin_agent_profiles;
 pub use recovery::{RecoveryAction, RecoveryCoordinator, RecoveryRecord};
 pub use runtime_control::RuntimeCoordinator;
+pub use workflow::{
+    WorkflowInstance, WorkflowInstantiationRequest, WorkflowTemplate, WorkflowTemplateCatalog,
+    WorkflowTemplateDiagnostic, WorkflowTemplateOrigin, WorkflowTemplateService,
+    WorkflowTemplateTask,
+};
 
 use thiserror::Error;
 
@@ -57,6 +67,14 @@ pub enum SchedulerError {
     ProjectDirectoryNotEmpty(std::path::PathBuf),
     #[error("Git initialization failed: {0}")]
     GitInitialization(String),
+    #[error("invalid workflow template: {0}")]
+    InvalidWorkflowTemplate(String),
+    #[error("workflow template not found: {0}")]
+    WorkflowTemplateNotFound(String),
+    #[error("invalid handoff: {0}")]
+    InvalidHandoff(String),
+    #[error("handoff integrity check failed: {0}")]
+    HandoffIntegrity(String),
     #[error("task is not schedulable: {0}")]
     NotSchedulable(String),
     #[error("task is already active: {0}")]
@@ -83,6 +101,10 @@ pub enum SchedulerError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Toml(#[from] toml::de::Error),
+    #[error(transparent)]
+    Receipt(#[from] ba_core::ReceiptChainError),
     #[error(transparent)]
     Runtime(#[from] ba_runtime::RuntimeError),
     #[error(transparent)]

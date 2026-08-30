@@ -7,6 +7,8 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 ## What works in this Alpha
 
 - Import an existing local Git repository or safely create a new local repository, then organize workstreams, milestones, and dependent tasks.
+- Instantiate six editable workflow templates as atomic task graphs with durable role assignments, acceptance criteria, dependencies, and declared write scopes.
+- Preserve structured Agent handoffs as repository-owned canonical JSON; verified outcomes, evidence, risks, and next steps are injected into directly dependent downstream runs.
 - Dispatch Codex-backed runs with capability detection and structured event capture.
 - Share a durable global run pool across projects (default four), apply project-specific caps, and automatically start queued work in dependency/submission order while serializing overlapping writers.
 - Isolate writes in Git worktrees and protect path scopes.
@@ -45,6 +47,15 @@ ba-agent-control dispatch reorder <DISPATCH_ID> <DISPATCH_ID>
 ba-agent-control dispatch cancel <DISPATCH_ID>
 ba-agent-control dispatch global 4
 ba-agent-control dispatch project-limit <PROJECT_ID> 2
+```
+
+For a multi-stage change, start from a complete workflow instead of creating every task manually:
+
+```powershell
+ba-agent-control workstream templates <PROJECT_ID>
+ba-agent-control workstream instantiate <PROJECT_ID> feature-delivery --name "Account recovery" --scope "crates/auth/**" --scope "apps/console/**"
+ba-agent-control task handoff-create <SOURCE_TASK_ID> --to <DOWNSTREAM_TASK_ID> --outcome "Root cause confirmed" --evidence "Focused tests passed" --next-step "Implement inside the declared scope"
+ba-agent-control task handoff-list <DOWNSTREAM_TASK_ID>
 ```
 
 ## 中文简介

@@ -1,0 +1,50 @@
+version = 1
+id = "security-review"
+name_zh = "安全审查与加固"
+name_en = "Security review and hardening"
+description_zh = "威胁建模、证据化审查、受控修复与独立复核。"
+description_en = "Threat modeling, evidence-based review, controlled remediation, and independent confirmation."
+
+[[tasks]]
+key = "threat-model"
+title_zh = "建立威胁模型并查找可利用路径"
+title_en = "Build the threat model and find exploitable paths"
+role = "security_reviewer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["覆盖授权、输入、文件系统和凭据边界", "按可利用性和影响排序发现"]
+acceptance_en = ["Cover authorization, input, filesystem, and credential boundaries", "Rank findings by exploitability and impact"]
+
+[[tasks]]
+key = "plan"
+title_zh = "制定安全修复方案"
+title_en = "Plan security remediation"
+role = "planner"
+write = false
+depends_on = ["threat-model"]
+path_scope = []
+acceptance_zh = ["每项修复对应具体威胁", "定义负向测试和兼容性边界"]
+acceptance_en = ["Map every remediation to a concrete threat", "Define negative tests and compatibility boundaries"]
+
+[[tasks]]
+key = "harden"
+title_zh = "实施安全加固"
+title_en = "Implement security hardening"
+role = "implementer"
+write = true
+depends_on = ["plan"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["关闭已确认的可利用路径", "保留最小权限与失败关闭行为"]
+acceptance_en = ["Close confirmed exploit paths", "Preserve least privilege and fail-closed behavior"]
+
+[[tasks]]
+key = "confirm"
+title_zh = "独立复核安全边界"
+title_en = "Independently confirm security boundaries"
+role = "security_reviewer"
+write = false
+depends_on = ["harden"]
+path_scope = []
+acceptance_zh = ["重新执行攻击路径与负向检查", "明确已解决、缓解和未解决项"]
+acceptance_en = ["Re-run attack paths and negative checks", "Distinguish resolved, mitigated, and unresolved findings"]

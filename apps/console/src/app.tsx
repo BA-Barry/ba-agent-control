@@ -54,7 +54,11 @@ import {
   createMilestone,
   createTask,
   dispatchTask,
+  instantiateWorkflow,
+  loadHandoffs,
+  loadWorkflowTemplates,
   loadConsoleSnapshot,
+  materializeWorkflowTemplate,
   messageRun,
   onboardProject,
   reorderDispatchQueue,
@@ -68,7 +72,7 @@ import {
   type EventStreamState,
 } from './api/console'
 import { demoSnapshot } from './data/demo'
-import type { AgentProfileSummary, ApprovalSummary, ConsoleSnapshot, RunEvent, RunStatus, TaskStatus, TaskSummary } from './types'
+import type { AgentProfileSummary, ApprovalSummary, ConsoleSnapshot, RunEvent, RunStatus, TaskStatus, TaskSummary, WorkflowTemplateSummary } from './types'
 
 type Language = 'zh' | 'en'
 type ThemePreference = 'system' | 'light' | 'dark'
@@ -424,6 +428,7 @@ function OverviewPage() {
     workstream: '质量与收据',
     workstreamEn: 'Quality and receipts',
     role: 'Test Engineer',
+    agentProfileId: 'profile-test-engineer',
     status: 'running',
     scope: 'crates/ba-receipt/**',
     gate: '2 / 6',
@@ -631,11 +636,31 @@ function ProjectsPage() {
 
 const columnHelper = createColumnHelper<TaskSummary>()
 
+function WorkflowTemplateRegister({
+  templates,
+  selectedId,
+  onSelect,
+}: {
+  templates: WorkflowTemplateSummary[]
+  selectedId: string
+  onSelect: (id: string) => void
+}) {
+  const text = useText()
+  return <div className="template-register" role="radiogroup" aria-label={text('工作流模板', 'Workflow templates')}>
+    {templates.map((template) => {
+      const roleChain = template.tasks.map((task) => roleCopy[task.role]?.[text('zh', 'en') as 'zh' | 'en'] ?? task.role).join(' → ')
+      const writers = template.tasks.filter((task) => task.write).length
+      return <button key={template.id} type="button" role="radio" aria-checked={selectedId === template.id} className={clsx('template-row', selectedId === template.id && 'is-selected')} onClick={() => onSelect(template.id)}><span className="template-selector" aria-hidden="true" /><span><strong>{text(template.name_zh, template.name_en)}</strong><small>{text(template.description_zh, template.description_en)}</small><em>{roleChain}</em></span><span className="template-measure"><b className="mono">{template.tasks.length}</b><small>{text('任务', 'tasks')}</small>{writers > 0 && <i>{text(`${writers} 个写任务`, `${writers} writers`)}</i>}</span></button>
+    })}
+  </div>
+}
+
 function WorkflowsPage() {
   const text = useText()
   const { data } = useConsoleSnapshot()
   const queryCache = useQueryClient()
   const [formOpen, setFormOpen] = useState(false)
+  const [templateOpen, setTemplateOpen] = useState(false)
   const [projectId, setProjectId] = useState(data.activeProjectId ?? '')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -643,9 +668,32 @@ function WorkflowsPage() {
   const [dependencyIds, setDependencyIds] = useState<string[]>([])
   const [write, setWrite] = useState(false)
   const [scope, setScope] = useState('')
+  const [assignedProfileId, setAssignedProfileId] = useState('')
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [templateWorkstreamName, setTemplateWorkstreamName] = useState('')
+  const [templateScope, setTemplateScope] = useState('')
   const [feedback, setFeedback] = useState('')
   const [dispatchTaskId, setDispatchTaskId] = useState('')
   const [profileId, setProfileId] = useState('')
+  const [handoffTaskId, setHandoffTaskId] = useState('')
+  const templateQuery = useQuery({
+    queryKey: ['workflow-templates', projectId],
+    queryFn: () => loadWorkflowTemplates(projectId),
+    enabled: data.source === 'live' && templateOpen && Boolean(projectId),
+  })
+  const selectedTemplate = templateQuery.data?.templates.find((template) => template.id === selectedTemplateId)
+  const templateNeedsWriteScope = selectedTemplate?.tasks.some((task) => task.write) ?? false
+  const handoffQuery = useQuery({
+    queryKey: ['task-handoffs', handoffTaskId],
+    queryFn: async () => {
+      const [incoming, outgoing] = await Promise.all([
+        loadHandoffs(handoffTaskId, 'incoming'),
+        loadHandoffs(handoffTaskId, 'outgoing'),
+      ])
+      return { incoming, outgoing }
+    },
+    enabled: data.source === 'live' && Boolean(handoffTaskId),
+  })
   const queueMutation = useMutation({
     mutationFn: (dispatchIds: string[]) => {
       if (!data.csrfToken) throw new Error('Live session is unavailable')
@@ -680,6 +728,20 @@ function WorkflowsPage() {
       data.tasks.some((task) => task.id === id && task.projectId === projectId)))
   }, [data.tasks, projectId])
   useEffect(() => {
+    const templates = templateQuery.data?.templates ?? []
+    if (templates.length > 0 && !templates.some((template) => template.id === selectedTemplateId)) {
+      setSelectedTemplateId(templates[0].id)
+    }
+  }, [selectedTemplateId, templateQuery.data?.templates])
+  useEffect(() => {
+    const candidates = write
+      ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
+      : data.agentProfiles
+    if (!candidates.some((profile) => profile.id === assignedProfileId)) {
+      setAssignedProfileId(candidates[0]?.id ?? '')
+    }
+  }, [assignedProfileId, data.agentProfiles, write])
+  useEffect(() => {
     if (!dispatchCandidate) return
     if (!compatibleProfiles.some((profile) => profile.id === profileId)) {
       setProfileId(recommendProfile(dispatchCandidate, compatibleProfiles)?.id ?? '')
@@ -702,6 +764,7 @@ function WorkflowsPage() {
         write,
         pathScope: write ? scopes : [],
         dependsOn: dependencyIds,
+        agentProfileId: assignedProfileId || null,
       }, data.csrfToken)
     },
     onSuccess: async () => {
@@ -712,10 +775,40 @@ function WorkflowsPage() {
       setDependencyIds([])
       setScope('')
       setWrite(false)
+      setAssignedProfileId('')
       setFormOpen(false)
       await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
     },
     onError: (error) => setFeedback(error instanceof Error ? error.message : text('任务创建失败。', 'Task creation failed.')),
+  })
+  const instantiateMutation = useMutation({
+    mutationFn: () => {
+      if (!data.csrfToken || !projectId || !selectedTemplate) throw new Error(text('请选择可用模板。', 'Choose an available template.'))
+      const writeScope = templateScope.split(/[\n,]/).map((value) => value.trim()).filter(Boolean)
+      return instantiateWorkflow({
+        projectId,
+        templateId: selectedTemplate.id,
+        workstreamName: templateWorkstreamName.trim() || null,
+        milestoneId: data.projects.find((project) => project.id === projectId)?.milestoneId ?? null,
+        writeScope,
+      }, data.csrfToken)
+    },
+    onSuccess: async (instance) => {
+      setFeedback(text(`已创建工作流及 ${instance.tasks.length} 个带角色任务。`, `Created the workflow with ${instance.tasks.length} assigned tasks.`))
+      setTemplateOpen(false)
+      setTemplateWorkstreamName('')
+      setTemplateScope('')
+      await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
+    },
+    onError: (error) => setFeedback(error instanceof Error ? error.message : text('工作流创建失败。', 'Workflow creation failed.')),
+  })
+  const materializeMutation = useMutation({
+    mutationFn: () => {
+      if (!data.csrfToken || !projectId || !selectedTemplate) throw new Error(text('请选择可用模板。', 'Choose an available template.'))
+      return materializeWorkflowTemplate(projectId, selectedTemplate.id, data.csrfToken)
+    },
+    onSuccess: (result) => setFeedback(text(`模板已复制到 ${result.path}`, `Template copied to ${result.path}`)),
+    onError: (error) => setFeedback(error instanceof Error ? error.message : text('模板复制失败。', 'Template copy failed.')),
   })
   const dispatchMutation = useMutation({
     mutationFn: () => {
@@ -734,12 +827,14 @@ function WorkflowsPage() {
   })
   const beginDispatch = useCallback((task: TaskSummary) => {
     setFormOpen(false)
+    setTemplateOpen(false)
+    setHandoffTaskId('')
     setFeedback('')
     setDispatchTaskId(task.id)
     const profiles = task.write
       ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
       : data.agentProfiles
-    setProfileId(recommendProfile(task, profiles)?.id ?? '')
+    setProfileId(profiles.find((profile) => profile.id === task.agentProfileId)?.id ?? recommendProfile(task, profiles)?.id ?? '')
   }, [data.agentProfiles])
   const columns = useMemo(() => [
     columnHelper.accessor('code', { header: text('测站', 'Station'), cell: (info) => <b className="mono accent-green">{info.getValue()}</b> }),
@@ -761,9 +856,9 @@ function WorkflowsPage() {
           : task.status !== 'draft' && task.status !== 'ready'
             ? text(`当前状态 ${task.status} 不可派发`, `Status ${task.status} cannot be dispatched`)
             : text('选择角色并派发', 'Choose a role and dispatch')
-      return <button className="field-action compact" type="button" disabled={!eligible || dispatchMutation.isPending} title={reason} aria-expanded={dispatchTaskId === task.id} onClick={() => beginDispatch(task)}><Play size={14} />{text('派发', 'Dispatch')}</button>
+      return <span className="task-actions"><button className="field-action compact" type="button" disabled={!eligible || dispatchMutation.isPending} title={reason} aria-expanded={dispatchTaskId === task.id} onClick={() => beginDispatch(task)}><Play size={14} />{text('派发', 'Dispatch')}</button><button className="field-action compact" type="button" disabled={data.source !== 'live'} aria-expanded={handoffTaskId === task.id} onClick={() => { setDispatchTaskId(''); setHandoffTaskId((current) => current === task.id ? '' : task.id) }}><ClipboardText size={14} />{text('交接', 'Handoffs')}</button></span>
     } }),
-  ], [beginDispatch, data.runtime.available, data.source, dispatchMutation.isPending, dispatchTaskId, text])
+  ], [beginDispatch, data.runtime.available, data.source, dispatchMutation.isPending, dispatchTaskId, handoffTaskId, text])
   const table = useReactTable({ data: data.tasks, columns, getCoreRowModel: getCoreRowModel() })
   const dependentTask = data.tasks.find((task) => task.dependencies.length > 0)
   const downstreamTask = dependentTask
@@ -778,10 +873,12 @@ function WorkflowsPage() {
   }
   const action = data.source === 'demo'
     ? <DemoActionButton primary labelZh="新建任务" labelEn="New task" messageZh="演示模式：任务创建向导尚未启动。" messageEn="Demo mode: the task-creation flow was not started." />
-    : <button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => setFormOpen((value) => !value)}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button>
+    : <><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={templateOpen} onClick={() => { setTemplateOpen((value) => !value); setFormOpen(false); setDispatchTaskId(''); setHandoffTaskId('') }}>{templateOpen ? text('收起模板', 'Close templates') : text('从模板创建', 'Create from template')}</button><button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => { setFormOpen((value) => !value); setTemplateOpen(false); setDispatchTaskId(''); setHandoffTaskId('') }}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button></>
   return <section className="register-page"><PageHeader titleZh="工作流与任务导线" titleEn="Workflow and task traverse" descriptionZh="依赖、写入范围、角色与质量门在同一登记面上保持可见。" descriptionEn="Dependencies, write scopes, roles, and gates remain visible in one register." action={action} />
-    {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW STATION</span><h3>{text('创建任务草稿', 'Create a task draft')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选新建）', 'New workstream name (optional)')}<input value={workstreamName} onChange={(event) => setWorkstreamName(event.target.value)} /></label><label className="wide-field">{text('前置任务（可多选）', 'Dependencies (multiple)')}<select multiple value={dependencyIds} onChange={(event) => setDependencyIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{data.tasks.filter((task) => task.projectId === projectId).map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)}</option>)}</select></label><label className="wide-field">{text('任务标题', 'Task title')}<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide-field">{text('说明与验收', 'Description and acceptance')}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="check-field"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} />{text('需要写入仓库', 'Writes to the repository')}</label>{write && <label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={scope} onChange={(event) => setScope(event.target.value)} placeholder="apps/console/**" /></label>}</div><footer><span>{text('任务先保存为草稿，派发前仍会执行依赖和范围检查。', 'Tasks start as drafts; dependency and scope checks still run before dispatch.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || (write && !scope.trim())}>{createMutation.isPending ? text('创建中…', 'Creating…') : text('创建草稿', 'Create draft')}</button></footer></form>}
+    {templateOpen && <section className="operation-panel workflow-template-panel"><header><span className="measure-label">WORKFLOW TEMPLATE</span><h3>{text('创建完整任务链', 'Create a complete task chain')}</h3><p>{text('模板一次性登记依赖、角色和验收边界。写任务仍只允许进入声明的仓库相对路径。', 'A template records dependencies, roles, and acceptance boundaries atomically. Writers remain limited to declared repository-relative paths.')}</p></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => { setProjectId(event.target.value); setSelectedTemplateId('') }}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选）', 'Workstream name (optional)')}<input value={templateWorkstreamName} onChange={(event) => setTemplateWorkstreamName(event.target.value)} placeholder={selectedTemplate ? text(selectedTemplate.name_zh, selectedTemplate.name_en) : ''} /></label></div>{templateQuery.isPending ? <div className="template-loading" role="status">{text('正在测绘模板目录…', 'Surveying the template catalog…')}</div> : templateQuery.isError ? <p className="operation-feedback is-error" role="alert">{templateQuery.error instanceof Error ? templateQuery.error.message : text('模板目录不可用。', 'Template catalog is unavailable.')}</p> : <WorkflowTemplateRegister templates={templateQuery.data?.templates ?? []} selectedId={selectedTemplateId} onSelect={setSelectedTemplateId} />}{templateQuery.data?.diagnostics.map((diagnostic) => <p className="template-diagnostic" key={`${diagnostic.path}:${diagnostic.error}`}><WarningCircle size={16} aria-hidden="true" /><span><strong>{diagnostic.path}</strong>{diagnostic.error}</span></p>)}{selectedTemplate && <div className="template-definition"><div><span className="measure-label">TASK CHAIN</span><ol>{selectedTemplate.tasks.map((task) => <li key={task.key}><b className="mono">{task.key}</b><span><strong>{text(task.title_zh, task.title_en)}</strong><small>{text(roleCopy[task.role]?.zh ?? task.role, roleCopy[task.role]?.en ?? task.role)}{task.depends_on.length > 0 ? ` · ← ${task.depends_on.join(', ')}` : ''}</small></span>{task.write ? <i>{text('写入', 'write')}</i> : <i>{text('只读', 'read')}</i>}</li>)}</ol></div>{templateNeedsWriteScope && <label>{text('共享写入范围（逗号或换行分隔）', 'Shared write scope (comma or newline separated)')}<textarea required className="mono" value={templateScope} onChange={(event) => setTemplateScope(event.target.value)} placeholder="crates/ba-scheduler/**, apps/console/**" /><small>{text('每个写任务会进入独立 worktree；范围重叠时默认串行。', 'Each writer gets an isolated worktree; overlapping scopes serialize by default.')}</small></label>}</div>}<footer><span>{text('“复制到项目”只创建可编辑 TOML，不会覆盖已有文件。', '“Copy to project” creates an editable TOML file and never overwrites an existing file.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={!selectedTemplate || selectedTemplate.origin !== 'builtin' || materializeMutation.isPending} onClick={() => materializeMutation.mutate()}>{materializeMutation.isPending ? text('复制中…', 'Copying…') : text('复制到项目', 'Copy to project')}</button><button className="field-action primary" type="button" disabled={!selectedTemplate || instantiateMutation.isPending || (templateNeedsWriteScope && !templateScope.trim())} onClick={() => instantiateMutation.mutate()}>{instantiateMutation.isPending ? text('创建中…', 'Creating…') : text('创建任务链', 'Create task chain')}</button></div></footer></section>}
+    {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW STATION</span><h3>{text('创建任务草稿', 'Create a task draft')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选新建）', 'New workstream name (optional)')}<input value={workstreamName} onChange={(event) => setWorkstreamName(event.target.value)} /></label><label>{text('负责角色', 'Assigned role')}<select required value={assignedProfileId} onChange={(event) => setAssignedProfileId(event.target.value)}>{data.agentProfiles.filter((profile) => !write || profile.sandboxMode === 'workspace-write').map((profile) => { const copy = profileCopy(profile); return <option key={profile.id} value={profile.id}>{text(copy.zh, copy.en)}</option> })}</select></label><label className="wide-field">{text('前置任务（可多选）', 'Dependencies (multiple)')}<select multiple value={dependencyIds} onChange={(event) => setDependencyIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{data.tasks.filter((task) => task.projectId === projectId).map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)}</option>)}</select></label><label className="wide-field">{text('任务标题', 'Task title')}<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide-field">{text('说明与验收', 'Description and acceptance')}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="check-field"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} />{text('需要写入仓库', 'Writes to the repository')}</label>{write && <label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={scope} onChange={(event) => setScope(event.target.value)} placeholder="apps/console/**" /></label>}</div><footer><span>{text('角色会随任务持久保存；派发时默认沿用，仍允许人工调整。', 'The role is stored with the task and reused by default at dispatch; it may still be adjusted manually.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || !assignedProfileId || (write && !scope.trim())}>{createMutation.isPending ? text('创建中…', 'Creating…') : text('创建草稿', 'Create draft')}</button></footer></form>}
     {dispatchCandidate && <form className="operation-panel dispatch-panel" onSubmit={(event) => { event.preventDefault(); dispatchMutation.mutate() }}><header><span className="measure-label">DISPATCH STATION</span><h3>{text(`派发 ${dispatchCandidate.code}`, `Dispatch ${dispatchCandidate.code}`)}</h3><p>{text(dispatchCandidate.title, dispatchCandidate.titleEn)}</p></header><div className="operation-fields"><label>{text('Agent 角色', 'Agent role')}<select required value={profileId} onChange={(event) => setProfileId(event.target.value)}>{compatibleProfiles.map((profile) => { const copy = profileCopy(profile); return <option key={profile.id} value={profile.id}>{text(copy.zh, copy.en)} · {profile.sandboxMode === 'workspace-write' ? text('可写', 'write') : text('只读', 'read-only')}</option> })}</select></label><div className="role-brief wide-field" aria-live="polite">{(() => { const profile = compatibleProfiles.find((item) => item.id === profileId); if (!profile) return <p>{text('没有与该任务权限匹配的角色。', 'No role matches this task permission.')}</p>; const copy = profileCopy(profile); return <><strong>{text(copy.zh, copy.en)}</strong><p>{text(copy.detailZh, copy.detailEn)}</p></> })()}</div></div><footer><span>{dispatchCandidate.write ? text(`写入范围：${dispatchCandidate.scope}。将创建独立 worktree。`, `Write scope: ${dispatchCandidate.scope}. A separate worktree will be created.`) : text('只读任务不会创建 worktree，也不得修改仓库文件。', 'Read-only work will not create a worktree and must not modify repository files.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={dispatchMutation.isPending} onClick={() => setDispatchTaskId('')}>{text('取消', 'Cancel')}</button><button className="field-action primary" type="submit" disabled={dispatchMutation.isPending || !profileId}>{dispatchMutation.isPending ? text('派发中…', 'Dispatching…') : text('确认派发', 'Confirm dispatch')}</button></div></footer></form>}
+    {handoffTaskId && <section className="operation-panel handoff-panel"><header><span className="measure-label">AGENT HANDOFF</span><h3>{text(`交接记录 · ${data.tasks.find((task) => task.id === handoffTaskId)?.code ?? ''}`, `Handoff records · ${data.tasks.find((task) => task.id === handoffTaskId)?.code ?? ''}`)}</h3><p>{text('上游结论、证据、风险和下一步会在下游任务启动时自动注入 Prompt。', 'Upstream outcomes, evidence, risks, and next steps are injected automatically when the downstream task starts.')}</p></header>{handoffQuery.isPending ? <div className="template-loading" role="status">{text('正在核对交接文件与摘要…', 'Verifying handoff files and digests…')}</div> : handoffQuery.isError ? <p className="operation-feedback is-error" role="alert">{handoffQuery.error instanceof Error ? handoffQuery.error.message : text('交接记录不可用。', 'Handoff records are unavailable.')}</p> : <div className="handoff-columns">{(['incoming', 'outgoing'] as const).map((direction) => <section key={direction}><header><strong>{direction === 'incoming' ? text('收到的交接', 'Incoming') : text('发出的交接', 'Outgoing')}</strong><span className="mono">{handoffQuery.data?.[direction].length ?? 0}</span></header>{handoffQuery.data?.[direction].length ? handoffQuery.data[direction].map((item) => <article key={item.handoff.id}><div><b>{item.handoff.outcome}</b><small className="mono">{item.handoff.id} · {new Date(item.handoff.createdAt).toLocaleString()}</small></div>{item.handoff.evidence.length > 0 && <dl><dt>{text('证据', 'Evidence')}</dt><dd>{item.handoff.evidence.join(' · ')}</dd></dl>}{item.handoff.risks.length > 0 && <dl><dt>{text('风险', 'Risks')}</dt><dd>{item.handoff.risks.join(' · ')}</dd></dl>}{item.handoff.nextSteps.length > 0 && <dl><dt>{text('下一步', 'Next steps')}</dt><dd>{item.handoff.nextSteps.join(' · ')}</dd></dl>}<span className="handoff-proof mono">SHA-256 {item.artifact.digest?.slice(0, 12) ?? '—'} · {item.artifact.path}</span></article>) : <p className="handoff-empty">{direction === 'incoming' ? text('尚无上游交接。完成前置任务后，Agent 可通过 MCP 或 CLI 写入结构化交接。', 'No upstream handoff yet. After a prerequisite finishes, an Agent can write one through MCP or CLI.') : text('此任务尚未向直接下游发送交接。', 'This task has not sent a handoff to a direct downstream task.')}</p>}</section>)}</div>}<footer><span>{text('交接只能发送给同项目的直接依赖下游；控制台读取时会校验规范 JSON 与摘要。', 'Handoffs may target only direct downstream dependencies in the same project; the console verifies canonical JSON and its digest when reading.')}</span><button className="field-action" type="button" onClick={() => setHandoffTaskId('')}>{text('关闭', 'Close')}</button></footer></section>}
     {feedback && <p className={clsx('operation-feedback', (createMutation.isError || dispatchMutation.isError) && 'is-error')} role="status">{feedback}</p>}
     {data.queue.length > 0 && <section className="queue-register" aria-label={text('全局派发队列', 'Global dispatch queue')}><header><div><span className="measure-label">GLOBAL QUEUE</span><h3>{text('等待启动', 'Waiting to start')}</h3></div><span className="mono">{data.queue.length} {text('项', 'items')} · {text(`全局上限 ${data.scheduler.globalMaxConcurrency}`, `global limit ${data.scheduler.globalMaxConcurrency}`)}</span></header>{data.queue.map((item, index) => <article key={item.dispatchId}><b className="mono">Q-{String(index + 1).padStart(2, '0')}</b><div><strong>{item.taskCode} · {text(item.title, item.titleEn)}</strong><small>{item.dependencies.length > 0 ? text(`等待依赖：${item.dependencies.join(', ')}`, `Dependencies: ${item.dependencies.join(', ')}`) : item.write ? text('等待并发名额或写入范围释放', 'Waiting for capacity or write scope') : text('等待全局并发名额', 'Waiting for global capacity')}</small></div><div className="queue-actions"><button type="button" aria-label={text(`上移 ${item.taskCode}`, `Move ${item.taskCode} up`)} disabled={index === 0 || queueMutation.isPending} onClick={() => moveQueued(index, -1)}>↑</button><button type="button" aria-label={text(`下移 ${item.taskCode}`, `Move ${item.taskCode} down`)} disabled={index === data.queue.length - 1 || queueMutation.isPending} onClick={() => moveQueued(index, 1)}>↓</button><button type="button" className="queue-cancel" disabled={cancelQueuedMutation.isPending} onClick={() => cancelQueuedMutation.mutate(item.dispatchId)}>{text('取消', 'Cancel')}</button></div></article>)}</section>}
     {data.tasks.length === 0 ? <EmptyRegister titleZh="尚无任务导线" titleEn="No task traverse yet" detailZh="创建工作流和任务后，依赖、范围、角色与质量门会显示在这里。" detailEn="Create a workstream and tasks to show dependencies, scopes, roles, and gates here." /> : <><div className="table-frame" tabIndex={0} role="region" aria-label={text('任务登记表', 'Task register table')}><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>

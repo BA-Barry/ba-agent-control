@@ -43,11 +43,61 @@ export interface TaskSummary {
   workstream: string
   workstreamEn: string
   role: string
+  agentProfileId: string | null
   status: TaskStatus
   scope: string
   gate: string
   dependencies: string[]
   write: boolean
+}
+
+export interface WorkflowTemplateTask {
+  key: string
+  title_zh: string
+  title_en: string
+  role: string
+  write: boolean
+  depends_on: string[]
+  path_scope: string[]
+  acceptance_zh: string[]
+  acceptance_en: string[]
+}
+
+export interface WorkflowTemplateSummary {
+  version: number
+  id: string
+  name_zh: string
+  name_en: string
+  description_zh: string
+  description_en: string
+  tasks: WorkflowTemplateTask[]
+  origin: 'builtin' | 'project'
+}
+
+export interface WorkflowTemplateCatalog {
+  templates: WorkflowTemplateSummary[]
+  diagnostics: Array<{ path: string; error: string }>
+}
+
+export interface HandoffSummary {
+  handoff: {
+    id: string
+    projectId: string
+    sourceTaskId: string
+    sourceRunId: string | null
+    destinationTaskIds: string[]
+    outcome: string
+    decisions: string[]
+    evidence: string[]
+    changedPaths: string[]
+    commands: Array<{ command: string; result: string }>
+    risks: string[]
+    nextSteps: string[]
+    artifactIds: string[]
+    receiptIds: string[]
+    createdAt: string
+  }
+  artifact: { id: string; path: string; digest: string | null }
 }
 
 export interface AgentProfileSummary {

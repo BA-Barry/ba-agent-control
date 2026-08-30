@@ -26,9 +26,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use thiserror::Error;
 
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SCHEMA_VERSION: u32 = 3;
 const MIGRATION_0001: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_scheduler_settings.sql");
+const MIGRATION_0003: &str = include_str!("../migrations/0003_task_assignments.sql");
 
 /// Thread-safe handle to the process-wide SQLite database.
 #[derive(Clone, Debug)]
@@ -290,9 +291,9 @@ impl SqliteStore {
     pub fn upsert_task(&self, item: &Task) -> Result<(), StoreError> {
         let data = json(item)?;
         self.connection.lock().execute(
-            "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7) \
-             ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,workstream_id=excluded.workstream_id,milestone_id=excluded.milestone_id,status=excluded.status,updated_at=excluded.updated_at,data=excluded.data",
-            params![item.id.as_str(), item.project_id.as_str(), optional_id(item.workstream_id.as_ref()), optional_id(item.milestone_id.as_ref()), item.status.as_str(), timestamp(item.updated_at), data],
+            "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8) \
+             ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,workstream_id=excluded.workstream_id,milestone_id=excluded.milestone_id,agent_profile_id=excluded.agent_profile_id,status=excluded.status,updated_at=excluded.updated_at,data=excluded.data",
+            params![item.id.as_str(), item.project_id.as_str(), optional_id(item.workstream_id.as_ref()), optional_id(item.milestone_id.as_ref()), optional_id(item.agent_profile_id.as_ref()), item.status.as_str(), timestamp(item.updated_at), data],
         )?;
         Ok(())
     }
@@ -329,17 +330,71 @@ impl SqliteStore {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 task.id.as_str(),
                 task.project_id.as_str(),
                 optional_id(task.workstream_id.as_ref()),
                 optional_id(task.milestone_id.as_ref()),
+                optional_id(task.agent_profile_id.as_ref()),
                 task.status.as_str(),
                 timestamp(task.updated_at),
                 task_data
             ],
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Insert one workstream and its complete template task graph atomically.
+    pub fn create_workflow_instance(
+        &self,
+        workstream: &Workstream,
+        tasks: &[Task],
+    ) -> Result<(), StoreError> {
+        if tasks.is_empty()
+            || tasks.iter().any(|task| {
+                task.project_id != workstream.project_id
+                    || task.workstream_id.as_ref() != Some(&workstream.id)
+            })
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "workflow tasks must be non-empty and belong to their workstream",
+            ));
+        }
+        let task_ids = tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if task_ids.len() != tasks.len()
+            || tasks
+                .iter()
+                .flat_map(|task| &task.depends_on)
+                .any(|dependency| !task_ids.contains(dependency))
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "workflow task identifiers and dependencies must form one self-contained graph",
+            ));
+        }
+
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO workstreams(id,project_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                workstream.id.as_str(),
+                workstream.project_id.as_str(),
+                workstream.status,
+                timestamp(workstream.updated_at),
+                json(workstream)?
+            ],
+        )?;
+        for task in tasks {
+            transaction.execute(
+                "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![task.id.as_str(),task.project_id.as_str(),optional_id(task.workstream_id.as_ref()),optional_id(task.milestone_id.as_ref()),optional_id(task.agent_profile_id.as_ref()),task.status.as_str(),timestamp(task.updated_at),json(task)?],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -1300,6 +1355,12 @@ fn migrate(connection: &mut Connection, from: u32) -> Result<(), StoreError> {
         let transaction = connection.transaction()?;
         transaction.execute_batch(MIGRATION_0002)?;
         transaction.pragma_update(None, "user_version", 2)?;
+        transaction.commit()?;
+    }
+    if from < 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_0003)?;
+        transaction.pragma_update(None, "user_version", 3)?;
         transaction.commit()?;
     }
     Ok(())

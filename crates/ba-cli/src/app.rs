@@ -12,8 +12,9 @@ use ba_git::RepoPath;
 use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
-    GateDefinition, ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService,
-    configured_gate, ensure_builtin_agent_profiles,
+    GateDefinition, HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
+    ProjectOnboardingRequest, ProjectOnboardingService, WorkflowInstantiationRequest,
+    WorkflowTemplateService, configured_gate, ensure_builtin_agent_profiles,
 };
 use ba_store::SqliteStore;
 use directories::ProjectDirs;
@@ -229,9 +230,43 @@ pub fn workstream(paths: &DataPaths, command: WorkstreamCommand, json: bool) -> 
         WorkstreamCommand::List { project_id } => {
             emit(&store.list_workstreams(&id_of(&project_id)?)?, json)
         }
+        WorkstreamCommand::Templates { project_id } => emit(
+            &WorkflowTemplateService::new(store).catalog(&id_of(&project_id)?)?,
+            json,
+        ),
+        WorkstreamCommand::Materialize {
+            project_id,
+            template_id,
+        } => emit(
+            &json!({
+                "path": WorkflowTemplateService::new(store)
+                    .materialize(&id_of(&project_id)?, &template_id)?
+            }),
+            json,
+        ),
+        WorkstreamCommand::Instantiate {
+            project_id,
+            template_id,
+            name,
+            milestone_id,
+            write_scope,
+        } => emit(
+            &WorkflowTemplateService::new(store).instantiate(&WorkflowInstantiationRequest {
+                project_id: id_of(&project_id)?,
+                template_id,
+                workstream_name: name,
+                milestone_id: milestone_id.as_deref().map(id_of).transpose()?,
+                write_scope,
+            })?,
+            json,
+        ),
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the CLI task dispatcher keeps each subcommand's validation and persistence path visible"
+)]
 pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow::Result<()> {
     let store = paths.store()?;
     match command {
@@ -244,6 +279,7 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
             depends_on,
             write,
             path_scope,
+            agent_profile_id,
         } => {
             if title.trim().is_empty() {
                 bail!("task title is required");
@@ -290,6 +326,15 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
                     bail!("dependency task belongs to a different project");
                 }
             }
+            let agent_profile_id = agent_profile_id.as_deref().map(id_of).transpose()?;
+            if let Some(profile_id) = &agent_profile_id {
+                let profile = store
+                    .get_agent_profile(profile_id)?
+                    .context("agent profile not found")?;
+                if write && profile.config["sandboxMode"] != "workspace-write" {
+                    bail!("assigned agent profile cannot execute write tasks");
+                }
+            }
             let stamp = now();
             let item = Task {
                 id: EntityId::new(),
@@ -302,6 +347,7 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
                 write,
                 path_scope,
                 depends_on,
+                agent_profile_id,
                 created_at: stamp,
                 updated_at: stamp,
             };
@@ -319,6 +365,60 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
             )
             .await?;
             emit(&value, json)
+        }
+        TaskCommand::HandoffCreate {
+            source_task_id,
+            source_run_id,
+            destination_task_ids,
+            outcome,
+            decisions,
+            evidence,
+            changed_paths,
+            command_evidence,
+            risks,
+            next_steps,
+            artifact_ids,
+            receipt_ids,
+        } => {
+            let commands = command_evidence
+                .into_iter()
+                .map(|value| {
+                    let (command, result) = value.split_once("=>").ok_or_else(|| {
+                        anyhow::anyhow!("--command-evidence must use `command => observed result`")
+                    })?;
+                    Ok(HandoffCommandEvidence {
+                        command: command.trim().into(),
+                        result: result.trim().into(),
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            emit(
+                &HandoffService::new(store).create(HandoffDraft {
+                    source_task_id: id_of(&source_task_id)?,
+                    source_run_id: source_run_id.as_deref().map(id_of).transpose()?,
+                    destination_task_ids: ids_of(&destination_task_ids)?,
+                    outcome,
+                    decisions,
+                    evidence,
+                    changed_paths,
+                    commands,
+                    risks,
+                    next_steps,
+                    artifact_ids: ids_of(&artifact_ids)?,
+                    receipt_ids: ids_of(&receipt_ids)?,
+                })?,
+                json,
+            )
+        }
+        TaskCommand::HandoffList { task_id, outgoing } => {
+            let service = HandoffService::new(store);
+            let task_id = id_of(&task_id)?;
+            let records = if outgoing {
+                service.list_from_task(&task_id)?
+            } else {
+                service.list_for_task(&task_id)?
+            };
+            emit(&records, json)
         }
     }
 }
@@ -560,6 +660,10 @@ pub async fn adapter(paths: &DataPaths, command: AdapterCommand, json: bool) -> 
 
 fn id_of(value: &str) -> anyhow::Result<EntityId> {
     EntityId::from_str(value).map_err(anyhow::Error::from)
+}
+
+fn ids_of(values: &[String]) -> anyhow::Result<Vec<EntityId>> {
+    values.iter().map(|value| id_of(value)).collect()
 }
 
 fn version_output(program: &str, args: &[&str]) -> Value {

@@ -13,6 +13,8 @@ import type {
   RunSummary,
   TaskStatus,
   TaskSummary,
+  WorkflowTemplateCatalog,
+  HandoffSummary,
 } from '../types'
 
 interface SessionResponse {
@@ -70,6 +72,7 @@ interface ApiTask {
   write: boolean
   path_scope: string[]
   depends_on: string[]
+  agent_profile_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -390,7 +393,9 @@ function mapSnapshot(
   const tasks: TaskSummary[] = allTasks.map((task) => {
     const workstream = task.workstream_id ? workstreamById.get(task.workstream_id) : undefined
     const run = allRuns.find((candidate) => candidate.task_id === task.id)
-    const profile = run?.agent_profile_id ? profileById.get(run.agent_profile_id) : undefined
+    const assignedProfile = task.agent_profile_id ? profileById.get(task.agent_profile_id) : undefined
+    const runProfile = run?.agent_profile_id ? profileById.get(run.agent_profile_id) : undefined
+    const profile = assignedProfile ?? runProfile
     const taskGates = gatesByTask.get(task.id) ?? []
     const configuredNames = configuredGates
       .filter((gate) => gate.projectId === task.project_id)
@@ -410,6 +415,7 @@ function mapSnapshot(
       workstream: workstream?.name ?? '未分配工作流',
       workstreamEn: workstream?.name ?? 'Unassigned workstream',
       role: profile?.role ?? profile?.name ?? 'unassigned',
+      agentProfileId: task.agent_profile_id ?? run?.agent_profile_id ?? null,
       status: task.status,
       scope: task.write ? (task.path_scope.join(', ') || '—') : 'READ-ONLY',
       gate: `${passed} / ${configuredNames.length}`,
@@ -678,8 +684,32 @@ export function createTask(input: {
   write: boolean
   pathScope: string[]
   dependsOn: string[]
+  agentProfileId: string | null
 }, csrfToken: string) {
   return mutate<{ id: string }>('/api/v1/tasks', csrfToken, input)
+}
+
+export function loadWorkflowTemplates(projectId: string) {
+  return apiFetch<WorkflowTemplateCatalog>(query('/api/v1/workflow-templates', 'project_id', projectId))
+}
+
+export function instantiateWorkflow(input: {
+  projectId: string
+  templateId: string
+  workstreamName: string | null
+  milestoneId: string | null
+  writeScope: string[]
+}, csrfToken: string) {
+  return mutate<{ templateId: string; workstream: { id: string }; tasks: ApiTask[] }>('/api/v1/workflow-instances', csrfToken, input)
+}
+
+export function materializeWorkflowTemplate(projectId: string, templateId: string, csrfToken: string) {
+  return mutate<{ path: string }>('/api/v1/workflow-templates/materialize', csrfToken, { projectId, templateId })
+}
+
+export function loadHandoffs(taskId: string, direction: 'incoming' | 'outgoing' = 'incoming') {
+  const params = new URLSearchParams({ task_id: taskId, direction })
+  return apiFetch<HandoffSummary[]>(`/api/v1/handoffs?${params.toString()}`)
 }
 
 export function dispatchTask(taskId: string, agentProfileId: string, csrfToken: string) {

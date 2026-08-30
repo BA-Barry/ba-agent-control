@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, loadConsoleSnapshot, mapRunEvent, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
+import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -21,7 +21,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
   const task = {
     id: '01TASK00000000000000000001', project_id: project.id, workstream_id: '01WORKSTREAM0000000000001',
     milestone_id: '01MILESTONE00000000000001', title: 'Connect local API', description: '', status: 'running', write: true,
-    path_scope: ['apps/console/**'], depends_on: [], created_at: '2026-08-24T10:00:00Z', updated_at: '2026-08-24T10:00:00Z',
+    path_scope: ['apps/console/**'], depends_on: [], agent_profile_id: '01PROFILE0000000000000001', created_at: '2026-08-24T10:00:00Z', updated_at: '2026-08-24T10:00:00Z',
   }
   const run = {
     id: '01RUN000000000000000000001', task_id: task.id, agent_profile_id: '01PROFILE0000000000000001',
@@ -73,7 +73,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
     name: 'live-repository', milestone: 'Personal Alpha', progress: 0,
     activeRuns: 1, receiptHead: 'abcdef12…7890',
   })
-  expect(snapshot.tasks[0]).toMatchObject({ title: 'Connect local API', workstream: 'Console', role: 'implementer', gate: '1 / 1', write: true })
+  expect(snapshot.tasks[0]).toMatchObject({ title: 'Connect local API', workstream: 'Console', role: 'implementer', agentProfileId: run.agent_profile_id, gate: '1 / 1', write: true })
   expect(snapshot.agentProfiles[0]).toMatchObject({ role: 'implementer', sandboxMode: 'workspace-write' })
   expect(snapshot.configuredGates[0]).toMatchObject({ projectId: project.id, name: 'lint', command: 'pnpm lint' })
   expect(snapshot.runs[0]).toMatchObject({
@@ -165,6 +165,7 @@ test('sends CSRF-protected creation, dispatch, gate, and retry mutations', async
   await createTask({
     projectId: '01PROJECT', workstreamId: null, workstreamName: 'Console', milestoneId: '01MILESTONE',
     title: 'Atomic task', description: '', write: true, pathScope: ['apps/console/**'], dependsOn: ['01DEPENDENCY'],
+    agentProfileId: '01PROFILE',
   }, 'csrf-token')
   await dispatchTask('01TASK', '01PROFILE', 'csrf-token')
   await runConfiguredGate('01TASK', '01RUN1', 'lint', 'csrf-token')
@@ -241,4 +242,31 @@ test('sends local-only project onboarding intent through the protected API', asy
   expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
     mode: 'create', path: 'G:\\Created', name: 'Created', description: '', language: 'zh-CN',
   })
+})
+
+test('loads templates and handoffs and sends protected workflow mutations', async () => {
+  const catalog = { templates: [{ id: 'feature-delivery', origin: 'builtin', tasks: [] }], diagnostics: [] }
+  const handoff = [{ handoff: { id: '01HANDOFF', outcome: 'done' }, artifact: { id: '01HANDOFF' } }]
+  const fetchMock = vi.fn()
+    .mockImplementationOnce(() => json(catalog))
+    .mockImplementationOnce(() => json({ templateId: 'feature-delivery', workstream: { id: '01WORKSTREAM' }, tasks: [{ id: '01TASK' }] }, 201))
+    .mockImplementationOnce(() => json({ path: 'G:\\Repo\\.ba-agent\\workflows\\feature-delivery.toml' }, 201))
+    .mockImplementationOnce(() => json(handoff))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await expect(loadWorkflowTemplates('01PROJECT')).resolves.toEqual(catalog)
+  await instantiateWorkflow({
+    projectId: '01PROJECT', templateId: 'feature-delivery', workstreamName: 'Alpha',
+    milestoneId: '01MILESTONE', writeScope: ['crates/**'],
+  }, 'csrf-token')
+  await materializeWorkflowTemplate('01PROJECT', 'feature-delivery', 'csrf-token')
+  await expect(loadHandoffs('01TASK', 'incoming')).resolves.toEqual(handoff)
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/workflow-templates?project_id=01PROJECT')
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({
+    projectId: '01PROJECT', templateId: 'feature-delivery', workstreamName: 'Alpha',
+    milestoneId: '01MILESTONE', writeScope: ['crates/**'],
+  })
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ projectId: '01PROJECT', templateId: 'feature-delivery' })
+  expect(fetchMock.mock.calls[3][0]).toContain('/api/v1/handoffs?task_id=01TASK&direction=incoming')
 })

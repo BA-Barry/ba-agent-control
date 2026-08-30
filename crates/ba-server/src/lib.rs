@@ -32,8 +32,9 @@ use ba_github::{GitHubAdapter, GitHubError};
 use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
-    ProjectOnboardingMode, ProjectOnboardingRequest, ProjectOnboardingService, RecoveryAction,
-    RecoveryCoordinator, RuntimeCoordinator, SchedulerError, SchedulerPolicyService,
+    HandoffDraft, HandoffService, ProjectOnboardingMode, ProjectOnboardingRequest,
+    ProjectOnboardingService, RecoveryAction, RecoveryCoordinator, RuntimeCoordinator,
+    SchedulerError, SchedulerPolicyService, WorkflowInstantiationRequest, WorkflowTemplateService,
     configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
@@ -446,6 +447,12 @@ pub fn router(state: AppState) -> Router {
             "/workstreams",
             get(list_workstreams).post(create_workstream),
         )
+        .route("/workflow-templates", get(list_workflow_templates))
+        .route(
+            "/workflow-templates/materialize",
+            post(materialize_workflow_template),
+        )
+        .route("/workflow-instances", post(create_workflow_instance))
         .route("/milestones", get(list_milestones).post(create_milestone))
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}/transition", post(transition_task))
@@ -471,6 +478,8 @@ pub fn router(state: AppState) -> Router {
         .route("/gates/run", post(run_gate))
         .route("/receipts", get(list_receipts))
         .route("/receipts/verify", post(verify_receipts))
+        .route("/handoffs", get(list_handoffs).post(create_handoff))
+        .route("/handoffs/{id}", get(get_handoff))
         .route("/adapters", get(adapter_status))
         .route("/adapters/github/repository", get(github_repository))
         .route_layer(middleware::from_fn_with_state(state.clone(), api_security));
@@ -826,6 +835,71 @@ async fn create_workstream(
     Ok((StatusCode::CREATED, Json(workstream)))
 }
 
+async fn list_workflow_templates(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<ba_scheduler::WorkflowTemplateCatalog>, ApiError> {
+    WorkflowTemplateService::new(state.store)
+        .catalog(&parse_id(&query.project_id)?)
+        .map(Json)
+        .map_err(workflow_error)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializeWorkflowTemplate {
+    project_id: String,
+    template_id: String,
+}
+
+async fn materialize_workflow_template(
+    State(state): State<AppState>,
+    Json(input): Json<MaterializeWorkflowTemplate>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let path = WorkflowTemplateService::new(state.store)
+        .materialize(&parse_id(&input.project_id)?, &input.template_id)
+        .map_err(workflow_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"path": path.to_string_lossy()})),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWorkflowInstance {
+    project_id: String,
+    template_id: String,
+    workstream_name: Option<String>,
+    milestone_id: Option<String>,
+    #[serde(default)]
+    write_scope: Vec<String>,
+}
+
+async fn create_workflow_instance(
+    State(state): State<AppState>,
+    Json(input): Json<CreateWorkflowInstance>,
+) -> Result<(StatusCode, Json<ba_scheduler::WorkflowInstance>), ApiError> {
+    let result = WorkflowTemplateService::new(state.store)
+        .instantiate(&WorkflowInstantiationRequest {
+            project_id: parse_id(&input.project_id)?,
+            template_id: input.template_id,
+            workstream_name: input.workstream_name,
+            milestone_id: input.milestone_id.as_deref().map(parse_id).transpose()?,
+            write_scope: input.write_scope,
+        })
+        .map_err(workflow_error)?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+fn workflow_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::WorkflowTemplateNotFound(_) => ApiError::not_found(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_request(error.to_string()),
+    }
+}
+
 async fn list_milestones(
     State(state): State<AppState>,
     Query(query): Query<ProjectQuery>,
@@ -918,6 +992,7 @@ struct CreateTask {
     path_scope: Vec<String>,
     #[serde(default)]
     depends_on: Vec<String>,
+    agent_profile_id: Option<String>,
 }
 
 fn resolve_task_workstream(
@@ -1025,6 +1100,22 @@ async fn create_task(
             ));
         }
     }
+    let agent_profile_id = input
+        .agent_profile_id
+        .as_deref()
+        .map(parse_id)
+        .transpose()?;
+    if let Some(profile_id) = &agent_profile_id {
+        let profile = state
+            .store
+            .get_agent_profile(profile_id)?
+            .ok_or_else(|| ApiError::not_found("agent profile not found"))?;
+        if input.write && profile.config["sandboxMode"] != "workspace-write" {
+            return Err(ApiError::bad_request(
+                "assigned agent profile cannot execute write tasks",
+            ));
+        }
+    }
     let task = Task {
         id: EntityId::new(),
         project_id,
@@ -1036,6 +1127,7 @@ async fn create_task(
         write: input.write,
         path_scope: input.path_scope,
         depends_on,
+        agent_profile_id,
         created_at: stamp,
         updated_at: stamp,
     };
@@ -1654,6 +1746,65 @@ async fn verify_receipts(
     Ok(Json(json!({"valid": true})))
 }
 
+#[derive(Debug, Deserialize)]
+struct HandoffQuery {
+    task_id: String,
+    #[serde(default = "default_handoff_direction")]
+    direction: String,
+}
+
+fn default_handoff_direction() -> String {
+    "incoming".into()
+}
+
+async fn list_handoffs(
+    State(state): State<AppState>,
+    Query(query): Query<HandoffQuery>,
+) -> Result<Json<Vec<ba_scheduler::HandoffArtifact>>, ApiError> {
+    let service = HandoffService::new(state.store);
+    let task_id = parse_id(&query.task_id)?;
+    let records = match query.direction.as_str() {
+        "incoming" => service.list_for_task(&task_id),
+        "outgoing" => service.list_from_task(&task_id),
+        _ => {
+            return Err(ApiError::bad_request(
+                "handoff direction must be incoming or outgoing",
+            ));
+        }
+    }
+    .map_err(handoff_error)?;
+    Ok(Json(records))
+}
+
+async fn create_handoff(
+    State(state): State<AppState>,
+    Json(input): Json<HandoffDraft>,
+) -> Result<(StatusCode, Json<ba_scheduler::HandoffArtifact>), ApiError> {
+    let result = HandoffService::new(state.store)
+        .create(input)
+        .map_err(handoff_error)?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+async fn get_handoff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ba_scheduler::HandoffArtifact>, ApiError> {
+    HandoffService::new(state.store)
+        .get(&parse_id(&id)?)
+        .map_err(handoff_error)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("handoff not found"))
+}
+
+fn handoff_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::HandoffIntegrity(_) => ApiError::conflict(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_request(error.to_string()),
+    }
+}
+
 async fn adapter_status(State(state): State<AppState>) -> Json<Value> {
     let github = state.github.probe().await;
     let codex = match state.runtime.probe().await {
@@ -2051,6 +2202,7 @@ mod tests {
             write: true,
             path_scope: vec!["src/**".into()],
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };
@@ -2439,6 +2591,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_and_handoff_endpoints_preserve_assigned_dependency_state()
+    -> anyhow::Result<()> {
+        let state = state()?;
+        let repository = tempdir()?;
+        fs::create_dir_all(repository.path().join(".ba-agent/workflows"))?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Workflow API".into(),
+            root_path: repository.path().to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+        ensure_builtin_agent_profiles(&state.store)?;
+
+        let Json(catalog) = list_workflow_templates(
+            State(state.clone()),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert_eq!(catalog.templates.len(), 6);
+
+        let (status, Json(instance)) = create_workflow_instance(
+            State(state.clone()),
+            Json(CreateWorkflowInstance {
+                project_id: project.id.to_string(),
+                template_id: "defect-investigation".into(),
+                workstream_name: Some("Session failure".into()),
+                milestone_id: None,
+                write_scope: vec!["crates/auth".into()],
+            }),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(instance.tasks.len(), 5);
+        assert!(
+            instance
+                .tasks
+                .iter()
+                .all(|task| task.agent_profile_id.is_some())
+        );
+        let destination = instance
+            .tasks
+            .iter()
+            .find(|task| !task.depends_on.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("dependent task missing"))?;
+        let source_id = destination.depends_on[0].clone();
+        let (handoff_status, Json(created)) = create_handoff(
+            State(state.clone()),
+            Json(HandoffDraft {
+                source_task_id: source_id,
+                source_run_id: None,
+                destination_task_ids: vec![destination.id.clone()],
+                outcome: "Reproduction and root cause are documented".into(),
+                decisions: Vec::new(),
+                evidence: vec!["Fixture reproduces the failure".into()],
+                changed_paths: Vec::new(),
+                commands: Vec::new(),
+                risks: Vec::new(),
+                next_steps: vec!["Use the verified failing fixture".into()],
+                artifact_ids: Vec::new(),
+                receipt_ids: Vec::new(),
+            }),
+        )
+        .await?;
+        assert_eq!(handoff_status, StatusCode::CREATED);
+        assert!(repository.path().join(&created.artifact.path).is_file());
+        let Json(incoming) = list_handoffs(
+            State(state),
+            Query(HandoffQuery {
+                task_id: destination.id.to_string(),
+                direction: "incoming".into(),
+            }),
+        )
+        .await?;
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].handoff.id, created.handoff.id);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn task_creation_can_atomically_create_its_workstream() -> anyhow::Result<()> {
         let state = state()?;
         let stamp = now();
@@ -2465,6 +2703,7 @@ mod tests {
                 write: false,
                 path_scope: Vec::new(),
                 depends_on: Vec::new(),
+                agent_profile_id: None,
             }),
         )
         .await?;
@@ -2486,6 +2725,7 @@ mod tests {
                 write: false,
                 path_scope: vec!["apps/console/**".into()],
                 depends_on: Vec::new(),
+                agent_profile_id: None,
             }),
         )
         .await
@@ -2514,6 +2754,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };
@@ -2530,6 +2771,7 @@ mod tests {
                 write: false,
                 path_scope: Vec::new(),
                 depends_on: vec![foreign_task.id.to_string()],
+                agent_profile_id: None,
             }),
         )
         .await
@@ -2644,6 +2886,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };
@@ -2735,6 +2978,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: profile.clone(),
             created_at: stamp,
             updated_at: stamp,
         };
@@ -2809,6 +3053,7 @@ mod tests {
             write: false,
             path_scope: Vec::new(),
             depends_on: Vec::new(),
+            agent_profile_id: None,
             created_at: stamp,
             updated_at: stamp,
         };

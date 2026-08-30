@@ -58,7 +58,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 5. Add workflow templates and explicit handoffs
 
-**Current gap:** users can model dependencies, but must manually decide which roles to use, dispatch each task, and carry findings between runs. The Coordinator profile does not yet orchestrate the other profiles automatically.
+**Progress (2026-08-30):** complete. Six built-in and project-overridable templates create an atomic assigned task graph through CLI, REST, MCP, and the console. Task-level role assignments survive restarts and become the dispatch default. Structured repository-owned handoffs are limited to direct downstream dependencies, verified when read, visible in the console, and injected on launch and recovery.
 
 **Target outcome:** provide editable templates for feature delivery, defect investigation, security review, migration, release preparation, and documentation verification. Each template should create narrow tasks, role assignments, dependencies, acceptance criteria, and declared write scopes. Persist structured handoffs so downstream Agents receive upstream findings without copying chat text manually.
 

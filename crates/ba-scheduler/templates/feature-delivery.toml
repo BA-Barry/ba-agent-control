@@ -1,0 +1,72 @@
+version = 1
+id = "feature-delivery"
+name_zh = "功能交付"
+name_en = "Feature delivery"
+description_zh = "从代码路径调查、设计与实现，到测试、审查和文档核验的完整交付链。"
+description_en = "A complete delivery chain from exploration and design through implementation, testing, review, and documentation verification."
+
+[[tasks]]
+key = "explore"
+title_zh = "调查现有实现与约束"
+title_en = "Explore the existing implementation and constraints"
+role = "explorer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["定位真实执行路径和相关测试", "列出已确认约束、风险和未知项"]
+acceptance_en = ["Locate the real execution path and relevant tests", "List confirmed constraints, risks, and unknowns"]
+
+[[tasks]]
+key = "plan"
+title_zh = "形成可执行设计与验收边界"
+title_en = "Define the executable design and acceptance boundary"
+role = "planner"
+write = false
+depends_on = ["explore"]
+path_scope = []
+acceptance_zh = ["给出范围明确的实现步骤", "明确测试、兼容性和失败处理"]
+acceptance_en = ["Provide scoped implementation steps", "Define tests, compatibility, and failure handling"]
+
+[[tasks]]
+key = "implement"
+title_zh = "实现完整功能切片"
+title_en = "Implement the complete feature slice"
+role = "implementer"
+write = true
+depends_on = ["plan"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["实现已批准行为且不越过声明范围", "运行与变更直接相关的验证"]
+acceptance_en = ["Implement the approved behavior within the declared scope", "Run verification directly relevant to the change"]
+
+[[tasks]]
+key = "test"
+title_zh = "验证行为与失败路径"
+title_en = "Verify behavior and failure paths"
+role = "test_engineer"
+write = true
+depends_on = ["implement"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["覆盖主要成功和失败场景", "记录精确命令、结果和剩余缺口"]
+acceptance_en = ["Cover primary success and failure scenarios", "Record exact commands, results, and remaining gaps"]
+
+[[tasks]]
+key = "review"
+title_zh = "独立审查实现与证据"
+title_en = "Independently review implementation and evidence"
+role = "reviewer"
+write = false
+depends_on = ["test"]
+path_scope = []
+acceptance_zh = ["按严重度报告可复现问题", "确认验收条件是否真正满足"]
+acceptance_en = ["Report reproducible findings by severity", "Confirm whether acceptance criteria are actually met"]
+
+[[tasks]]
+key = "docs"
+title_zh = "核验使用说明与恢复路径"
+title_en = "Verify usage guidance and recovery paths"
+role = "docs_reviewer"
+write = false
+depends_on = ["review"]
+path_scope = []
+acceptance_zh = ["逐条核对文档命令与实际行为", "标明设置、升级和恢复注意事项"]
+acceptance_en = ["Verify documented commands against actual behavior", "Cover setup, upgrade, and recovery considerations"]

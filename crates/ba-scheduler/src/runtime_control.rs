@@ -14,8 +14,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::{
-    ApprovalCoordinator, ApprovalResolution, DispatchBundle, DispatchCoordinator, Scheduler,
-    SchedulerConfig, SchedulerError, SchedulerPolicyService,
+    ApprovalCoordinator, ApprovalResolution, DispatchBundle, DispatchCoordinator, HandoffArtifact,
+    HandoffService, Scheduler, SchedulerConfig, SchedulerError, SchedulerPolicyService,
+    handoff::handoff_prompt_section,
 };
 
 /// Shared runtime lifecycle used by HTTP, MCP, and CLI control surfaces.
@@ -160,9 +161,13 @@ impl RuntimeCoordinator {
             |worktree| PathBuf::from(&worktree.path),
         );
         let cwd = cwd.canonicalize()?;
-        let prompt = prompt_override
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| compose_task_prompt(&task, profile.as_ref()));
+        let handoffs = HandoffService::new(self.store.clone()).list_for_task(&task.id)?;
+        let prompt = compose_runtime_prompt(
+            &task,
+            profile.as_ref(),
+            &handoffs,
+            prompt_override.as_deref(),
+        );
         let environment = managed_run_environment(&task)?;
         let mut runtime_events = self.runtime.subscribe();
 
@@ -385,7 +390,8 @@ impl RuntimeCoordinator {
         run_id: &EntityId,
         prompt_override: Option<String>,
     ) -> Result<Run, SchedulerError> {
-        let RecoveryLaunch { task, request } = self.prepare_recovery(run_id, prompt_override)?;
+        let RecoveryLaunch { task, request } =
+            self.prepare_recovery(run_id, prompt_override.as_deref())?;
         let mut runtime_events = self.runtime.subscribe();
         let resumed = match self.runtime.resume(request).await {
             Ok(handle) => handle,
@@ -438,7 +444,7 @@ impl RuntimeCoordinator {
     fn prepare_recovery(
         &self,
         run_id: &EntityId,
-        prompt_override: Option<String>,
+        prompt_override: Option<&str>,
     ) -> Result<RecoveryLaunch, SchedulerError> {
         let run = self
             .store
@@ -477,14 +483,11 @@ impl RuntimeCoordinator {
             || PathBuf::from(project.root_path),
             |worktree| PathBuf::from(worktree.path),
         );
-        let prompt = prompt_override
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                format!(
-                    "恢复先前中断的 BA Agent 任务。\n\n{}",
-                    compose_task_prompt(&task, profile.as_ref())
-                )
-            });
+        let handoffs = HandoffService::new(self.store.clone()).list_for_task(&task.id)?;
+        let prompt = format!(
+            "恢复先前中断的 BA Agent 任务。\n\n{}",
+            compose_runtime_prompt(&task, profile.as_ref(), &handoffs, prompt_override,)
+        );
         let request = ResumeRequest {
             thread_id,
             prompt,
@@ -720,6 +723,23 @@ impl RuntimeCoordinator {
         }
         Ok(update)
     }
+}
+
+fn compose_runtime_prompt(
+    task: &Task,
+    profile: Option<&AgentProfile>,
+    handoffs: &[HandoffArtifact],
+    prompt_override: Option<&str>,
+) -> String {
+    let mut prompt = prompt_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| compose_task_prompt(task, profile), str::to_owned);
+    if let Some(section) = handoff_prompt_section(handoffs) {
+        prompt.push_str("\n\n");
+        prompt.push_str(&section);
+    }
+    prompt
 }
 
 fn compose_task_prompt(task: &Task, profile: Option<&AgentProfile>) -> String {

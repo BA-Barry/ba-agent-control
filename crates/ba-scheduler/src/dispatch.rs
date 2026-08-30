@@ -60,17 +60,20 @@ impl DispatchCoordinator {
         agent_profile_id: Option<&EntityId>,
         prompt: Option<String>,
     ) -> Result<DispatchBundle, SchedulerError> {
-        if let Some(profile_id) = agent_profile_id {
+        let mut task = self
+            .store
+            .get_task(task_id)?
+            .ok_or_else(|| SchedulerError::NotSchedulable(format!("task {task_id} not found")))?;
+        let agent_profile_id = agent_profile_id
+            .cloned()
+            .or_else(|| task.agent_profile_id.clone());
+        if let Some(profile_id) = &agent_profile_id {
             if self.store.get_agent_profile(profile_id)?.is_none() {
                 return Err(SchedulerError::NotSchedulable(format!(
                     "agent profile {profile_id} does not exist"
                 )));
             }
         }
-        let mut task = self
-            .store
-            .get_task(task_id)?
-            .ok_or_else(|| SchedulerError::NotSchedulable(format!("task {task_id} not found")))?;
         if task.status == TaskStatus::Draft {
             task = self.store.transition_task(task_id, TaskStatus::Ready)?;
         }
@@ -102,7 +105,7 @@ impl DispatchCoordinator {
         let run = Run {
             id: EntityId::new(),
             task_id: task.id.clone(),
-            agent_profile_id: agent_profile_id.cloned(),
+            agent_profile_id: agent_profile_id.clone(),
             status: RunStatus::Queued,
             adapter: "codex".into(),
             runtime_run_id: None,
@@ -116,7 +119,7 @@ impl DispatchCoordinator {
             id: EntityId::new(),
             task_id: task.id,
             run_id: run.id.clone(),
-            agent_profile_id: agent_profile_id.cloned(),
+            agent_profile_id,
             status: "queued".into(),
             queue_position: 0,
             prompt: prompt.filter(|value| !value.trim().is_empty()),

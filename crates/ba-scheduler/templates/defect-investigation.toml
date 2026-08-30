@@ -1,0 +1,61 @@
+version = 1
+id = "defect-investigation"
+name_zh = "缺陷调查与修复"
+name_en = "Defect investigation and repair"
+description_zh = "先复现和定位根因，再实施范围受控的修复、回归验证和独立审查。"
+description_en = "Reproduce and locate the root cause before a scoped repair, regression verification, and independent review."
+
+[[tasks]]
+key = "reproduce"
+title_zh = "复现缺陷并定位根因"
+title_en = "Reproduce the defect and locate the root cause"
+role = "explorer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["给出可重复的触发步骤", "用代码和运行证据说明根因"]
+acceptance_en = ["Provide repeatable reproduction steps", "Explain the root cause with code and runtime evidence"]
+
+[[tasks]]
+key = "plan"
+title_zh = "设计最小完整修复"
+title_en = "Design the smallest complete repair"
+role = "planner"
+write = false
+depends_on = ["reproduce"]
+path_scope = []
+acceptance_zh = ["区分根因修复与症状绕过", "定义回归和兼容性检查"]
+acceptance_en = ["Distinguish a root-cause repair from a symptom workaround", "Define regression and compatibility checks"]
+
+[[tasks]]
+key = "repair"
+title_zh = "实施根因修复"
+title_en = "Implement the root-cause repair"
+role = "implementer"
+write = true
+depends_on = ["plan"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["缺陷不再复现", "未削弱既有错误处理或测试"]
+acceptance_en = ["The defect no longer reproduces", "Existing error handling and tests are not weakened"]
+
+[[tasks]]
+key = "regression"
+title_zh = "执行回归和边界验证"
+title_en = "Run regression and boundary verification"
+role = "test_engineer"
+write = true
+depends_on = ["repair"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["新增或强化能捕获原缺陷的测试", "验证相邻成功与失败路径"]
+acceptance_en = ["Add or strengthen a test that catches the original defect", "Verify adjacent success and failure paths"]
+
+[[tasks]]
+key = "review"
+title_zh = "审查修复完整性"
+title_en = "Review repair completeness"
+role = "reviewer"
+write = false
+depends_on = ["regression"]
+path_scope = []
+acceptance_zh = ["确认根因、修复和测试证据闭环", "列出仍需处理的风险"]
+acceptance_en = ["Confirm root cause, repair, and test evidence form a closed loop", "List any remaining risks"]

@@ -40,13 +40,49 @@ ba-agent-control project create "G:\全新项目" --name "新项目"
 ## 推荐的控制台流程
 
 1. 在“项目”导入现有 Git 仓库或创建全新的本地仓库，并确认注册成功。
-2. 在“工作流与任务”创建工作流、里程碑和任务。
-3. 为任务填写清晰的目标、验收条件和依赖。写任务必须声明仓库相对路径范围，例如 `apps/console/**`；只读调查不要声明写入范围。
-4. 将任务从 `draft` 调整到 `ready`，选择系统推荐的 Agent 角色并派发。
+2. 在“工作流与任务”优先选择“从模板创建”。功能交付、缺陷调查、安全审查、迁移、发布准备和文档核验模板会一次性创建完整依赖链；仍可用“新建任务”登记单个例外任务。
+3. 为工作流填写仓库相对写入范围，例如 `apps/console/**`。模板会把角色、验收条件和直接依赖持久写入每个任务；只读步骤不会获得写权限。
+4. 将首个可执行任务从 `draft` 调整到 `ready` 后派发。派发面板默认沿用任务已分配角色，允许人工调整为权限兼容的其他角色。
 5. 在同一页面观察“等待启动”队列。四个槽位占满后，第五个任务会持久排队；可以上移、下移或取消。依赖未完成或写范围冲突的任务会等待，不会抢占执行。
 6. 在“运行详情”查看实时事件、Agent 输出、引导、停止和重试；在“审批中心”处理 push、merge、deploy、删除或提权请求。
 7. 在“质量与收据”运行项目配置的格式、lint、类型、测试、秘密扫描和 diff 审查。所有必需门禁通过后，写任务才会生成本地提交、`ba/<workstream>/<task-id>` 分支和永久收据。
 8. 在“设置与适配器”调整全局共享上限和各项目上限。项目值不得高于全局值；降低上限不会中断已经运行的任务，只影响后续准入。
+
+## 工作流模板与 Agent 交接
+
+六个内置模板随二进制提供，不依赖网络。项目可以在 `.ba-agent/workflows/` 保存同名 TOML 作为显式覆盖；控制台的“复制到项目”或 CLI `materialize` 只创建新文件，已有文件会被拒绝覆盖。实例化是一个 SQLite 事务：工作流或任一任务写入失败时，整条任务链都会回滚。
+
+```powershell
+# 查看内置模板和项目覆盖诊断
+ba-agent-control workstream templates <PROJECT_ID>
+
+# 创建功能交付任务链；每个 --scope 都是仓库相对范围
+ba-agent-control workstream instantiate <PROJECT_ID> feature-delivery `
+  --name "登录恢复" `
+  --milestone-id <MILESTONE_ID> `
+  --scope "crates/auth/**" `
+  --scope "apps/console/**"
+
+# 复制内置模板到项目后再编辑；不会覆盖同名文件
+ba-agent-control workstream materialize <PROJECT_ID> feature-delivery
+```
+
+上游 Agent 完成后应创建结构化交接，而不是只在聊天里留一句结论。交接目标只能是同一项目中直接依赖该上游任务的下游任务。记录保存在 `.ba-agent/knowledge/handoffs/`，包含结果、决策、证据、变更路径、命令结果、风险和下一步；下游 Run 启动或恢复时会自动注入经校验内容。
+
+```powershell
+ba-agent-control task handoff-create <SOURCE_TASK_ID> `
+  --to <DOWNSTREAM_TASK_ID> `
+  --outcome "已定位会话解析器的边界错误" `
+  --evidence "cargo test -p auth 通过" `
+  --changed-path "crates/auth/src/session.rs" `
+  --risk "仍需验证旧版浏览器" `
+  --next-step "先添加回归 fixture"
+
+ba-agent-control task handoff-list <DOWNSTREAM_TASK_ID>
+ba-agent-control task handoff-list <SOURCE_TASK_ID> --outgoing
+```
+
+控制台任务行的“交接”会同时显示收到和发出的记录，并在读取时核对规范 JSON、Artifact 元数据和 SHA-256 摘要。摘要用于发现尚未提交到 Git 的交接文件被替换；它不是额外的质量门。
 
 ## 并发与队列
 
@@ -68,7 +104,7 @@ ba-agent-control dispatch cancel <DISPATCH_ID>
 ```powershell
 ba-agent-control project list
 ba-agent-control adapter profiles
-ba-agent-control task add <PROJECT_ID> "调查登录失败" --description "定位根因并给出证据"
+ba-agent-control task add <PROJECT_ID> "调查登录失败" --description "定位根因并给出证据" --agent-profile-id <EXPLORER_PROFILE_ID>
 ba-agent-control task status <TASK_ID> ready
 ba-agent-control dispatch <TASK_ID> --agent-profile-id <PROFILE_ID>
 ba-agent-control run list --task-id <TASK_ID>
@@ -79,7 +115,7 @@ ba-agent-control receipt verify <PROJECT_ID>
 写任务示例：
 
 ```powershell
-ba-agent-control task add <PROJECT_ID> "修复登录状态机" --write --scope "crates/auth/**" --depends-on <调查任务ID>
+ba-agent-control task add <PROJECT_ID> "修复登录状态机" --write --scope "crates/auth/**" --depends-on <调查任务ID> --agent-profile-id <IMPLEMENTER_PROFILE_ID>
 ```
 
 所有命令都支持全局 `--json`，便于脚本处理。使用 `ba-agent-control <命令> --help` 查看完整参数。

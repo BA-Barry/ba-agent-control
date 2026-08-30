@@ -1,0 +1,50 @@
+version = 1
+id = "release-preparation"
+name_zh = "发布准备"
+name_en = "Release preparation"
+description_zh = "以只读方式核对质量、安全、文档和发布决策；不会执行 push、tag、部署或发布。"
+description_en = "Read-only verification of quality, security, documentation, and release readiness; never pushes, tags, deploys, or publishes."
+
+[[tasks]]
+key = "quality"
+title_zh = "执行发布范围质量核对"
+title_en = "Run release-scope quality verification"
+role = "test_engineer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["执行项目定义的全量检查", "保留失败、性能和平台差异证据"]
+acceptance_en = ["Run the project's full verification", "Preserve failure, performance, and platform-difference evidence"]
+
+[[tasks]]
+key = "security"
+title_zh = "复核发布安全边界"
+title_en = "Review release security boundaries"
+role = "security_reviewer"
+write = false
+depends_on = ["quality"]
+path_scope = []
+acceptance_zh = ["复核凭据、权限和供应链边界", "明确未解决安全风险"]
+acceptance_en = ["Review credentials, permissions, and supply-chain boundaries", "Make unresolved security risks explicit"]
+
+[[tasks]]
+key = "docs"
+title_zh = "核验安装、升级和回滚资料"
+title_en = "Verify install, upgrade, and rollback material"
+role = "docs_reviewer"
+write = false
+depends_on = ["security"]
+path_scope = []
+acceptance_zh = ["所有用户命令可复现", "升级、卸载、数据保留和回滚说明完整"]
+acceptance_en = ["All user commands are reproducible", "Upgrade, uninstall, data retention, and rollback guidance is complete"]
+
+[[tasks]]
+key = "decision"
+title_zh = "形成发布就绪结论"
+title_en = "Produce the release-readiness decision"
+role = "coordinator"
+write = false
+depends_on = ["docs"]
+path_scope = []
+acceptance_zh = ["汇总通过项、失败项和需人工决定项", "明确该任务不执行任何远程发布动作"]
+acceptance_en = ["Summarize passes, failures, and required human decisions", "State explicitly that this task performs no remote publication action"]

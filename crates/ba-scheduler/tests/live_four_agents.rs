@@ -117,6 +117,7 @@ fn read_task(project_id: &EntityId, title: &str) -> Task {
         write: false,
         path_scope: Vec::new(),
         depends_on: Vec::new(),
+        agent_profile_id: None,
         created_at: stamp,
         updated_at: stamp,
     }

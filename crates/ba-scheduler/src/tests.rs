@@ -20,11 +20,12 @@ use serde_json::json;
 
 use crate::{
     ApprovalCoordinator, ApprovalResolution, DispatchCoordinator, FinalizationCoordinator,
-    GateCoordinator, GateDefinition, GateEligibility, GateRunner, ProjectOnboardingMode,
-    ProjectOnboardingRequest, ProjectOnboardingService, RecoveryAction, RecoveryCoordinator,
-    RuntimeCoordinator, ScheduleBlocker, Scheduler, SchedulerConfig, SchedulerError,
-    SchedulerPolicyService, configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
-    evaluate_required_gates,
+    GateCoordinator, GateDefinition, GateEligibility, GateRunner, HandoffCommandEvidence,
+    HandoffDraft, HandoffService, ProjectOnboardingMode, ProjectOnboardingRequest,
+    ProjectOnboardingService, RecoveryAction, RecoveryCoordinator, RuntimeCoordinator,
+    ScheduleBlocker, Scheduler, SchedulerConfig, SchedulerError, SchedulerPolicyService,
+    WorkflowInstantiationRequest, WorkflowTemplateOrigin, WorkflowTemplateService, configured_gate,
+    configured_gate_names, ensure_builtin_agent_profiles, evaluate_required_gates,
 };
 
 #[derive(Debug)]
@@ -106,6 +107,7 @@ fn task(project_id: &EntityId, title: &str, write: bool, paths: &[&str]) -> Task
         write,
         path_scope: paths.iter().map(|path| (*path).to_owned()).collect(),
         depends_on: Vec::new(),
+        agent_profile_id: None,
         created_at: timestamp,
         updated_at: timestamp,
     }
@@ -239,6 +241,160 @@ fn project_onboarding_never_modifies_a_nonempty_create_target()
     );
     assert!(!target.join(".git").exists());
     assert!(!target.join(".ba-agent").exists());
+    Ok(())
+}
+
+#[test]
+fn workflow_templates_instantiate_assigned_atomic_task_graphs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = directory.path().join("repo");
+    std::fs::create_dir_all(repository.join(".ba-agent/workflows"))?;
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let stamp = now();
+    let project = Project {
+        id: EntityId::new(),
+        name: "Template fixture".into(),
+        root_path: repository.to_string_lossy().into_owned(),
+        description: String::new(),
+        language: "en".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    store.upsert_project(&project)?;
+    ensure_builtin_agent_profiles(&store)?;
+    let service = WorkflowTemplateService::new(store.clone());
+    let catalog = service.catalog(&project.id)?;
+    assert_eq!(catalog.templates.len(), 6);
+    assert!(catalog.diagnostics.is_empty());
+    assert!(
+        catalog
+            .templates
+            .iter()
+            .all(|template| template.origin == WorkflowTemplateOrigin::Builtin)
+    );
+
+    let instance = service.instantiate(&WorkflowInstantiationRequest {
+        project_id: project.id.clone(),
+        template_id: "feature-delivery".into(),
+        workstream_name: Some("Account recovery".into()),
+        milestone_id: None,
+        write_scope: vec!["crates/auth".into(), "apps/console".into()],
+    })?;
+    assert_eq!(instance.workstream.name, "Account recovery");
+    assert_eq!(instance.tasks.len(), 6);
+    assert!(
+        instance
+            .tasks
+            .iter()
+            .all(|task| task.agent_profile_id.is_some())
+    );
+    assert!(
+        instance
+            .tasks
+            .iter()
+            .filter(|task| task.write)
+            .all(|task| task.path_scope == ["apps/console", "crates/auth"])
+    );
+    assert!(
+        instance
+            .tasks
+            .iter()
+            .any(|task| task.description.contains("handoff.create"))
+    );
+    assert_eq!(store.list_workstreams(&project.id)?.len(), 1);
+    assert_eq!(store.list_tasks(&project.id)?.len(), 6);
+
+    let materialized = service.materialize(&project.id, "feature-delivery")?;
+    assert!(materialized.is_file());
+    assert!(
+        service
+            .materialize(&project.id, "feature-delivery")
+            .is_err()
+    );
+    std::fs::write(
+        repository.join(".ba-agent/workflows/broken.toml"),
+        "version = 1\nid = \"broken\"\n",
+    )?;
+    let catalog = service.catalog(&project.id)?;
+    assert_eq!(catalog.templates.len(), 6);
+    assert_eq!(catalog.diagnostics.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn structured_handoffs_are_persisted_injected_and_tamper_evident()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = directory.path().join("repo");
+    std::fs::create_dir_all(repository.join(".ba-agent/knowledge"))?;
+    let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
+    let stamp = now();
+    let project = Project {
+        id: EntityId::new(),
+        name: "Handoff fixture".into(),
+        root_path: repository.to_string_lossy().into_owned(),
+        description: String::new(),
+        language: "en".into(),
+        created_at: stamp,
+        updated_at: stamp,
+    };
+    store.upsert_project(&project)?;
+    let mut source = task(&project.id, "Investigate", false, &[]);
+    source.status = TaskStatus::Completed;
+    let mut destination = task(&project.id, "Repair", true, &["crates/auth"]);
+    destination.depends_on = vec![source.id.clone()];
+    store.upsert_task(&source)?;
+    store.upsert_task(&destination)?;
+
+    let service = HandoffService::new(store.clone());
+    let created = service.create(HandoffDraft {
+        source_task_id: source.id.clone(),
+        source_run_id: None,
+        destination_task_ids: vec![destination.id.clone()],
+        outcome: "Root cause fixed in the session parser".into(),
+        decisions: vec!["Keep the existing public response shape".into()],
+        evidence: vec!["The failing fixture now reaches the guarded branch".into()],
+        changed_paths: vec!["crates/auth/src/session.rs".into()],
+        commands: vec![HandoffCommandEvidence {
+            command: "cargo test -p auth".into(),
+            result: "passed".into(),
+        }],
+        risks: vec!["Browser compatibility still needs verification".into()],
+        next_steps: vec!["Add the regression fixture first".into()],
+        artifact_ids: Vec::new(),
+        receipt_ids: Vec::new(),
+    })?;
+    assert!(repository.join(&created.artifact.path).is_file());
+    let incoming = service.list_for_task(&destination.id)?;
+    assert_eq!(incoming.len(), 1);
+    let prompt = crate::handoff::handoff_prompt_section(&incoming)
+        .ok_or("handoff prompt section missing")?;
+    assert!(prompt.contains("Root cause fixed"));
+    assert!(prompt.contains("Add the regression fixture first"));
+
+    let bundle = DispatchCoordinator::new(store.clone(), directory.path().join("worktrees"))
+        .enqueue_with_prompt(&destination.id, None, Some("Implement the repair".into()))?;
+    let runtime = Arc::new(HoldingRuntime::new());
+    RuntimeCoordinator::new(store, runtime.clone())
+        .launch(bundle, Some("Implement the repair".into()))
+        .await?;
+    let launched_prompt = &runtime
+        .launches
+        .lock()
+        .map_err(|_| missing("launch log poisoned"))?[0]
+        .1;
+    assert!(launched_prompt.contains("Implement the repair"));
+    assert!(launched_prompt.contains("Root cause fixed"));
+    assert!(launched_prompt.contains("Add the regression fixture first"));
+
+    let path = repository.join(&created.artifact.path);
+    let forged = std::fs::read_to_string(&path)?.replace("Root cause fixed", "Forged result");
+    std::fs::write(path, forged)?;
+    assert!(matches!(
+        service.get(&created.artifact.id),
+        Err(SchedulerError::HandoffIntegrity(_))
+    ));
     Ok(())
 }
 

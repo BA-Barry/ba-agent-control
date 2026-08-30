@@ -1,0 +1,50 @@
+version = 1
+id = "documentation-verification"
+name_zh = "文档更新与核验"
+name_en = "Documentation update and verification"
+description_zh = "先确认实现事实与读者路径，再更新文档并由独立角色逐条复核。"
+description_en = "Confirm implementation facts and reader journeys before updating documentation and independently verifying every claim."
+
+[[tasks]]
+key = "audit"
+title_zh = "审计现有文档缺口"
+title_en = "Audit current documentation gaps"
+role = "docs_reviewer"
+write = false
+depends_on = []
+path_scope = []
+acceptance_zh = ["按读者任务列出缺失或过期内容", "引用实现和命令证据"]
+acceptance_en = ["List missing or outdated content by reader task", "Cite implementation and command evidence"]
+
+[[tasks]]
+key = "verify-facts"
+title_zh = "核对实现事实与运行命令"
+title_en = "Verify implementation facts and runtime commands"
+role = "explorer"
+write = false
+depends_on = ["audit"]
+path_scope = []
+acceptance_zh = ["实际执行或检查所有关键命令", "区分稳定行为、限制和未来计划"]
+acceptance_en = ["Execute or inspect every important command", "Distinguish stable behavior, limitations, and future plans"]
+
+[[tasks]]
+key = "update"
+title_zh = "更新用户与维护者文档"
+title_en = "Update user and maintainer documentation"
+role = "implementer"
+write = true
+depends_on = ["verify-facts"]
+path_scope = ["$WRITE_SCOPE"]
+acceptance_zh = ["文档直接支持目标读者完成任务", "保留准确的边界、恢复和安全说明"]
+acceptance_en = ["Documentation directly enables the target reader's task", "Preserve accurate boundaries, recovery, and safety guidance"]
+
+[[tasks]]
+key = "review"
+title_zh = "独立复核文档可复现性"
+title_en = "Independently verify documentation reproducibility"
+role = "docs_reviewer"
+write = false
+depends_on = ["update"]
+path_scope = []
+acceptance_zh = ["逐条验证命令、路径和产品声明", "报告模糊、遗漏或不可复现内容"]
+acceptance_en = ["Verify commands, paths, and product claims line by line", "Report ambiguous, missing, or irreproducible content"]

@@ -319,6 +319,42 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             true,
         ),
         definition(
+            "workflow-template.list",
+            "List six built-in workflow templates plus valid project-local TOML overrides and diagnostics.",
+            BTreeMap::from([("project_id", field("Project ULID"))]),
+            &["project_id"],
+            true,
+        ),
+        definition(
+            "workflow-template.materialize",
+            "Copy one built-in template into the project's .ba-agent/workflows directory for explicit editing without overwriting an existing file.",
+            BTreeMap::from([
+                ("project_id", field("Project ULID")),
+                ("template_id", field("Built-in workflow template id")),
+            ]),
+            &["project_id", "template_id"],
+            false,
+        ),
+        definition(
+            "workflow.instantiate",
+            "Atomically create a workstream and assigned dependency graph from a validated workflow template.",
+            BTreeMap::from([
+                ("project_id", field("Project ULID")),
+                ("template_id", field("Workflow template id")),
+                ("workstream_name", field("Optional instance name")),
+                (
+                    "milestone_id",
+                    field("Optional project-level milestone ULID"),
+                ),
+                (
+                    "write_scope",
+                    json!({"type":"array","items":{"type":"string"},"description":"Repository-relative scope substituted into write tasks"}),
+                ),
+            ]),
+            &["project_id", "template_id"],
+            false,
+        ),
+        definition(
             "milestone.list",
             "List durable milestones for a project.",
             BTreeMap::from([("project_id", field("Project ULID"))]),
@@ -369,9 +405,77 @@ pub fn default_tools() -> Vec<ToolDefinition> {
                     "depends_on",
                     json!({"type": "array", "items": {"type": "string"}}),
                 ),
+                (
+                    "agent_profile_id",
+                    field("Optional durable Agent profile assignment"),
+                ),
             ]),
             &["workstream_id", "title"],
             false,
+        ),
+        definition(
+            "handoff.create",
+            "Persist a bounded structured handoff from one task to directly dependent downstream tasks so state survives restart and compaction.",
+            BTreeMap::from([
+                ("source_task_id", field("Source task ULID")),
+                ("source_run_id", field("Optional source run ULID")),
+                (
+                    "destination_task_ids",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                ("outcome", field("Verified outcome summary")),
+                (
+                    "decisions",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                (
+                    "evidence",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                (
+                    "changed_paths",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                (
+                    "commands",
+                    json!({"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"result":{"type":"string"}},"required":["command","result"],"additionalProperties":false}}),
+                ),
+                ("risks", json!({"type":"array","items":{"type":"string"}})),
+                (
+                    "next_steps",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                (
+                    "artifact_ids",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+                (
+                    "receipt_ids",
+                    json!({"type":"array","items":{"type":"string"}}),
+                ),
+            ]),
+            &["source_task_id", "destination_task_ids", "outcome"],
+            false,
+        ),
+        definition(
+            "handoff.list",
+            "List verified incoming or outgoing structured handoffs for one task.",
+            BTreeMap::from([
+                ("task_id", field("Task ULID")),
+                (
+                    "direction",
+                    json!({"type":"string","enum":["incoming","outgoing"]}),
+                ),
+            ]),
+            &["task_id"],
+            true,
+        ),
+        definition(
+            "handoff.get",
+            "Read and verify one structured handoff artifact.",
+            BTreeMap::from([("handoff_id", field("Handoff Artifact ULID"))]),
+            &["handoff_id"],
+            true,
         ),
         definition(
             "task.transition",
@@ -398,7 +502,7 @@ pub fn default_tools() -> Vec<ToolDefinition> {
                 ("agent_profile_id", field("Agent profile ULID")),
                 ("prompt", field("Optional task prompt override")),
             ]),
-            &["task_id", "agent_profile_id"],
+            &["task_id"],
             false,
         ),
         definition(
@@ -608,5 +712,8 @@ mod tests {
         let tools = default_tools();
         assert!(tools.iter().any(|tool| tool.name == "project.import"));
         assert!(tools.iter().any(|tool| tool.name == "project.create"));
+        assert!(tools.iter().any(|tool| tool.name == "workflow.instantiate"));
+        assert!(tools.iter().any(|tool| tool.name == "handoff.create"));
+        assert!(tools.iter().any(|tool| tool.name == "handoff.list"));
     }
 }
