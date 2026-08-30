@@ -1459,6 +1459,54 @@ fn rejection_ends_run_and_cancels_sibling_approvals() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[test]
+fn runtime_rejection_resumes_after_the_last_pending_approval()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let coordinator = ApprovalCoordinator::new(fixture.store.clone());
+    let rejected = coordinator.request_runtime_operation(
+        &fixture.run_id,
+        "mcpServer/elicitation/request",
+        "first",
+        &json!({}),
+    )?;
+    let approved = coordinator.request_runtime_operation(
+        &fixture.run_id,
+        "mcpServer/elicitation/request",
+        "second",
+        &json!({}),
+    )?;
+
+    coordinator.resolve_runtime(&rejected.id, ApprovalResolution::Reject, &json!({}))?;
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::WaitingApproval
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_approval(&approved.id)?
+            .ok_or_else(|| missing("approval missing"))?
+            .status,
+        ApprovalStatus::Pending
+    );
+
+    coordinator.resolve_runtime(&approved.id, ApprovalResolution::Approve, &json!({}))?;
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("resumed run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn gate_runner_executes_argv_without_a_shell() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;

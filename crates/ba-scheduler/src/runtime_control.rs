@@ -635,7 +635,7 @@ impl RuntimeCoordinator {
                 .respond_approval(runtime_run_id, request_id, runtime_decision)
                 .await?;
         }
-        let approval = ApprovalCoordinator::new(self.store.clone()).resolve(
+        let approval = ApprovalCoordinator::new(self.store.clone()).resolve_runtime(
             approval_id,
             resolution,
             evidence,

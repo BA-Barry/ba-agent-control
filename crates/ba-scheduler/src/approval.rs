@@ -114,7 +114,7 @@ impl ApprovalCoordinator {
         Ok(approval)
     }
 
-    /// Resolve one durable approval and advance or terminate its run consistently.
+    /// Resolve a protected policy approval and advance or terminate its run consistently.
     ///
     /// # Errors
     ///
@@ -125,6 +125,35 @@ impl ApprovalCoordinator {
         approval_id: &EntityId,
         resolution: ApprovalResolution,
         evidence: &Value,
+    ) -> Result<Approval, SchedulerError> {
+        self.resolve_with_policy(approval_id, resolution, evidence, true)
+    }
+
+    /// Resolve a runtime approval without prematurely deciding the Run outcome.
+    ///
+    /// A declined tool call is delivered back to the runtime, which may choose a
+    /// safe alternative and still complete the Task. Protected Git approvals use
+    /// [`Self::resolve`] instead because their rejection is a firm boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the approval is missing/already resolved, its Run is no
+    /// longer active, or durable state cannot be updated.
+    pub fn resolve_runtime(
+        &self,
+        approval_id: &EntityId,
+        resolution: ApprovalResolution,
+        evidence: &Value,
+    ) -> Result<Approval, SchedulerError> {
+        self.resolve_with_policy(approval_id, resolution, evidence, false)
+    }
+
+    fn resolve_with_policy(
+        &self,
+        approval_id: &EntityId,
+        resolution: ApprovalResolution,
+        evidence: &Value,
+        terminate_on_rejection: bool,
     ) -> Result<Approval, SchedulerError> {
         let mut approval = self
             .store
@@ -143,34 +172,38 @@ impl ApprovalCoordinator {
         approval.decided_at = Some(now());
         self.store.upsert_approval(&approval)?;
 
-        match resolution {
-            ApprovalResolution::Approve => {
-                let any_pending = self
-                    .store
-                    .list_approvals(&approval.run_id)?
-                    .iter()
-                    .any(|candidate| candidate.status == ApprovalStatus::Pending);
-                let run = self.store.get_run(&approval.run_id)?.ok_or_else(|| {
-                    SchedulerError::ApprovalRunInactive(approval.run_id.to_string())
-                })?;
-                if !any_pending && run.status == RunStatus::WaitingApproval {
-                    self.store
-                        .transition_run(&approval.run_id, RunStatus::Running)?;
-                }
+        if terminate_on_rejection
+            && matches!(
+                resolution,
+                ApprovalResolution::Reject | ApprovalResolution::Cancel
+            )
+        {
+            self.cancel_sibling_approvals(&approval)?;
+            let run = self
+                .store
+                .get_run(&approval.run_id)?
+                .ok_or_else(|| SchedulerError::ApprovalRunInactive(approval.run_id.to_string()))?;
+            if run.status == RunStatus::WaitingApproval {
+                let terminal = if resolution == ApprovalResolution::Cancel {
+                    RunStatus::Cancelled
+                } else {
+                    RunStatus::Failed
+                };
+                self.store.transition_run(&approval.run_id, terminal)?;
             }
-            ApprovalResolution::Reject | ApprovalResolution::Cancel => {
-                self.cancel_sibling_approvals(&approval)?;
-                let run = self.store.get_run(&approval.run_id)?.ok_or_else(|| {
-                    SchedulerError::ApprovalRunInactive(approval.run_id.to_string())
-                })?;
-                if run.status == RunStatus::WaitingApproval {
-                    let terminal = if resolution == ApprovalResolution::Cancel {
-                        RunStatus::Cancelled
-                    } else {
-                        RunStatus::Failed
-                    };
-                    self.store.transition_run(&approval.run_id, terminal)?;
-                }
+        } else {
+            let any_pending = self
+                .store
+                .list_approvals(&approval.run_id)?
+                .iter()
+                .any(|candidate| candidate.status == ApprovalStatus::Pending);
+            let run = self
+                .store
+                .get_run(&approval.run_id)?
+                .ok_or_else(|| SchedulerError::ApprovalRunInactive(approval.run_id.to_string()))?;
+            if !any_pending && run.status == RunStatus::WaitingApproval {
+                self.store
+                    .transition_run(&approval.run_id, RunStatus::Running)?;
             }
         }
         Ok(approval)

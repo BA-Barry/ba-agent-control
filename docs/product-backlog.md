@@ -70,6 +70,8 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 7. Reduce safe read-only approval noise and recover after one rejected tool call
 
+**Progress (2026-08-31):** runtime approvals now resolve independently from protected Git approvals. Rejecting or cancelling one App Server command or MCP tool call returns the Run to `running` when no other approval remains, so the Agent can report a safe alternative and the runtime decides the eventual terminal state. Rejected push, deploy, and other protected Git operations still terminate the Run and cancel their sibling approvals.
+
 **Current gap:** the first self-hosted Reviewer run required repeated Windows read-only command approvals, and one rejected tool call terminated the whole run instead of allowing a safe alternative. Durable task `01M0SKWJKQHM8MVWC7H3PAP1YZ` already represents this defect.
 
 **Target outcome:** group narrowly equivalent read-only approvals where the runtime supports it, preserve per-command evidence, and allow the Agent to continue after a declined tool call unless the declined operation is essential.
