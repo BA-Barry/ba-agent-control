@@ -16,6 +16,7 @@ mod profiles;
 mod recovery;
 mod review_repair;
 mod runtime_control;
+mod task_disposition;
 mod workflow;
 
 pub use approval::{ApprovalCoordinator, ApprovalResolution};
@@ -46,6 +47,7 @@ pub use review_repair::{
     ReviewRepairLoopStartRequest,
 };
 pub use runtime_control::RuntimeCoordinator;
+pub use task_disposition::TaskDispositionService;
 pub use workflow::{
     WorkflowInstance, WorkflowInstantiationRequest, WorkflowTemplate, WorkflowTemplateCatalog,
     WorkflowTemplateDiagnostic, WorkflowTemplateOrigin, WorkflowTemplateService,
@@ -80,6 +82,12 @@ pub enum SchedulerError {
     InvalidReviewRepairLoop(String),
     #[error("review/repair loop not found: {0}")]
     ReviewRepairLoopNotFound(String),
+    #[error("invalid task disposition: {0}")]
+    InvalidTaskDisposition(String),
+    #[error("task disposition conflict: {0}")]
+    TaskDispositionConflict(String),
+    #[error("task not found for disposition: {0}")]
+    TaskDispositionNotFound(String),
     #[error("invalid handoff: {0}")]
     InvalidHandoff(String),
     #[error("handoff integrity check failed: {0}")]

@@ -707,6 +707,18 @@ a { color: inherit; text-underline-offset: .2em; }
 .template-definition textarea { min-height: 116px; resize: vertical; border: 1px solid var(--ink); background: var(--paper); color: var(--ink); font: 10px/1.5 var(--mono); }
 .template-definition label small { font-size: 8px; font-weight: 400; line-height: 1.45; }
 .task-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-history-register { display: grid; border-top: 1px solid var(--ink); }
+.task-history-register > article { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .6fr); gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--rule); }
+.history-summary, .history-actions { display: grid; align-content: start; gap: 7px; min-width: 0; }
+.history-summary strong, .history-summary p, .history-summary code { overflow-wrap: anywhere; }
+.history-summary small { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9px; }
+.history-summary p { margin: 0; font-size: 11px; line-height: 1.5; }
+.history-summary code { color: var(--muted); font-size: 9px; }
+.history-actions label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.disposition-log { grid-column: 1 / -1; display: grid; gap: 8px; padding: 12px; border-left: 3px solid var(--accent); background: var(--paper); }
+.disposition-log p { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 12px; margin: 0; font-size: 10px; }
+.disposition-log b { color: var(--accent); text-transform: uppercase; }
+.disposition-log small { color: var(--muted); overflow-wrap: anywhere; }
 .handoff-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border: 1px solid var(--ink); }
 .handoff-columns > section:first-child { border-right: 1px solid var(--ink); }
 .handoff-columns > section > header { min-height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 13px; border-bottom: 1px solid var(--ink); background: var(--paper-deep); }
@@ -1206,6 +1218,9 @@ a { color: inherit; text-underline-offset: .2em; }
   .gate-register article p { grid-column: 2 / 5; }
   .settings-layout label { grid-template-columns: 1fr; }
   .queue-register article { grid-template-columns: 42px minmax(0,1fr); }
+  .task-history-register > article { grid-template-columns: 1fr; }
+  .disposition-log { grid-column: 1; }
+  .disposition-log p { grid-template-columns: 1fr; gap: 4px; }
   .review-loop-register > header { align-items: flex-start; flex-direction: column; }
   .queue-actions { grid-column: 2; justify-self: start; }
   .scheduler-register > form { grid-template-columns: 1fr; }

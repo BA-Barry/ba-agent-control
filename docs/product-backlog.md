@@ -80,6 +80,8 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 8. Reconcile obsolete durable tasks without rewriting history
 
+**Progress (2026-08-31): complete locally.** Archive, supersede, and restore are now separate append-only task disposition records rather than lifecycle states. The active console, REST, CLI, and MCP lists hide archived or superseded tasks by default while scheduler dependency checks retain the complete graph. Every decision requires a reason; supersede also requires a same-project replacement. Queued, running, review, actively dispatched, and still-required upstream tasks are rejected. Restore makes the original Task visible again without changing its status, Runs, events, gates, receipts, or dependencies. SQLite immediate transactions prevent concurrent disposition heads, and desktop/mobile browser tests exercise supersede, history inspection, and restore.
+
 **Current gap:** several early Alpha tasks remain draft or blocked even though their work was completed outside those original Runs. Directly marking them completed would manufacture lifecycle evidence, while leaving them mixed with live work confuses the backlog.
 
 **Target outcome:** provide an explicit archive/supersede action with a reason and replacement reference. Preserve original states and events while hiding superseded entries from the default active view.

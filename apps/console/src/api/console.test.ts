@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { cancelDispatch, createMilestone, createProject, createReviewRepairLoop, createTask, decideReviewRepairLoop, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadReviewRepairLoops, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
+import { archiveTask, cancelDispatch, createMilestone, createProject, createReviewRepairLoop, createTask, decideReviewRepairLoop, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadInactiveTasks, loadReviewRepairLoops, loadTaskDispositionHistory, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, restoreTask, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents, supersedeTask } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -301,4 +301,38 @@ test('creates, lists, and decides bounded review repair loops', async () => {
   expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({
     decision: 'repair', note: 'P1 remains reproducible',
   })
+})
+
+test('maps inactive tasks and sends append-only disposition mutations', async () => {
+  const disposition = {
+    id: '01DISPOSITION', task_id: '01TASK', action: 'superseded', reason: 'new task replaces it',
+    replacement_task_id: '01REPLACEMENT', previous_disposition_id: null, created_at: '2026-08-31T01:00:00Z',
+  }
+  const task = {
+    id: '01TASK', project_id: '01PROJECT', workstream_id: null, milestone_id: null,
+    title: 'Obsolete draft', description: '', status: 'blocked', write: true, path_scope: ['crates/**'],
+    depends_on: [], agent_profile_id: null, created_at: '2026-08-30T01:00:00Z', updated_at: '2026-08-30T01:00:00Z',
+  }
+  const fetchMock = vi.fn()
+    .mockImplementationOnce(() => json([{ task, disposition }]))
+    .mockImplementationOnce(() => json([disposition]))
+    .mockImplementationOnce(() => json({ ...disposition, action: 'archived' }, 201))
+    .mockImplementationOnce(() => json(disposition, 201))
+    .mockImplementationOnce(() => json({ ...disposition, action: 'restored' }, 201))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await expect(loadInactiveTasks('01PROJECT')).resolves.toMatchObject([{
+    id: '01TASK', title: 'Obsolete draft', scope: 'crates/**',
+    disposition: { action: 'superseded', replacementTaskId: '01REPLACEMENT' },
+  }])
+  await expect(loadTaskDispositionHistory('01TASK')).resolves.toMatchObject([{ action: 'superseded' }])
+  await archiveTask('01TASK', 'no longer relevant', 'csrf-token')
+  await supersedeTask('01TASK', '01REPLACEMENT', 'new task replaces it', 'csrf-token')
+  await restoreTask('01TASK', 'needed for comparison', 'csrf-token')
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/tasks/inactive?project_id=01PROJECT')
+  expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/tasks/01TASK/dispositions')
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ reason: 'no longer relevant' })
+  expect(JSON.parse(fetchMock.mock.calls[3][1].body as string)).toEqual({ replacementTaskId: '01REPLACEMENT', reason: 'new task replaces it' })
+  expect(JSON.parse(fetchMock.mock.calls[4][1].body as string)).toEqual({ reason: 'needed for comparison' })
 })

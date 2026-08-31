@@ -16,6 +16,8 @@ import type {
   WorkflowTemplateCatalog,
   ReviewRepairLoopSummary,
   HandoffSummary,
+  InactiveTaskSummary,
+  TaskDispositionSummary,
 } from '../types'
 
 interface SessionResponse {
@@ -76,6 +78,21 @@ interface ApiTask {
   agent_profile_id?: string | null
   created_at: string
   updated_at: string
+}
+
+interface ApiTaskDisposition {
+  id: string
+  task_id: string
+  action: TaskDispositionSummary['action']
+  reason: string
+  replacement_task_id: string | null
+  previous_disposition_id: string | null
+  created_at: string
+}
+
+interface ApiInactiveTask {
+  task: ApiTask
+  disposition: ApiTaskDisposition
 }
 
 interface ApiAgentProfile {
@@ -688,6 +705,48 @@ export function createTask(input: {
   agentProfileId: string | null
 }, csrfToken: string) {
   return mutate<{ id: string }>('/api/v1/tasks', csrfToken, input)
+}
+
+function mapTaskDisposition(item: ApiTaskDisposition): TaskDispositionSummary {
+  return {
+    id: item.id,
+    taskId: item.task_id,
+    action: item.action,
+    reason: item.reason,
+    replacementTaskId: item.replacement_task_id,
+    previousDispositionId: item.previous_disposition_id,
+    createdAt: item.created_at,
+  }
+}
+
+export async function loadInactiveTasks(projectId: string): Promise<InactiveTaskSummary[]> {
+  const items = await apiFetch<ApiInactiveTask[]>(query('/api/v1/tasks/inactive', 'project_id', projectId))
+  return items.map(({ task, disposition }) => ({
+    id: task.id,
+    projectId: task.project_id,
+    title: task.title,
+    status: task.status,
+    write: task.write,
+    scope: task.write ? (task.path_scope.join(', ') || '—') : 'READ-ONLY',
+    disposition: mapTaskDisposition(disposition),
+  }))
+}
+
+export async function loadTaskDispositionHistory(taskId: string): Promise<TaskDispositionSummary[]> {
+  const items = await apiFetch<ApiTaskDisposition[]>(`/api/v1/tasks/${encodeURIComponent(taskId)}/dispositions`)
+  return items.map(mapTaskDisposition)
+}
+
+export function archiveTask(taskId: string, reason: string, csrfToken: string) {
+  return mutate<ApiTaskDisposition>(`/api/v1/tasks/${encodeURIComponent(taskId)}/archive`, csrfToken, { reason })
+}
+
+export function supersedeTask(taskId: string, replacementTaskId: string, reason: string, csrfToken: string) {
+  return mutate<ApiTaskDisposition>(`/api/v1/tasks/${encodeURIComponent(taskId)}/supersede`, csrfToken, { replacementTaskId, reason })
+}
+
+export function restoreTask(taskId: string, reason: string, csrfToken: string) {
+  return mutate<ApiTaskDisposition>(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, csrfToken, { reason })
 }
 
 export function loadWorkflowTemplates(projectId: string) {

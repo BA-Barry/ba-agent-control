@@ -269,6 +269,60 @@ async function mockLongRunApi(page: Page, withQueue = false) {
       }])
       return
     }
+    if (path === '/api/v1/tasks/inactive') {
+      await json(route, [{
+        task: {
+          id: '01INACTIVETASK0000000000001',
+          project_id: projectId,
+          workstream_id: '01WORKSTREAM',
+          milestone_id: null,
+          title: '已被替代的旧任务',
+          description: '保留原状态与执行证据',
+          status: 'blocked',
+          write: false,
+          path_scope: [],
+          depends_on: [],
+          created_at: now,
+          updated_at: now,
+        },
+        disposition: {
+          id: '01DISPOSITION00000000000001',
+          task_id: '01INACTIVETASK0000000000001',
+          action: 'superseded',
+          reason: '新的恢复任务已经覆盖原执行边界',
+          replacement_task_id: draftTaskId,
+          previous_disposition_id: null,
+          created_at: now,
+        },
+      }])
+      return
+    }
+    if (path.startsWith('/api/v1/tasks/') && path.endsWith('/dispositions') && route.request().method() === 'GET') {
+      await json(route, [{
+        id: '01DISPOSITION00000000000001',
+        task_id: '01INACTIVETASK0000000000001',
+        action: 'superseded',
+        reason: '新的恢复任务已经覆盖原执行边界',
+        replacement_task_id: draftTaskId,
+        previous_disposition_id: null,
+        created_at: now,
+      }])
+      return
+    }
+    if (path.startsWith('/api/v1/tasks/') && ['/archive', '/supersede', '/restore'].some((suffix) => path.endsWith(suffix)) && route.request().method() === 'POST') {
+      const action = path.endsWith('/restore') ? 'restored' : path.endsWith('/supersede') ? 'superseded' : 'archived'
+      const input = route.request().postDataJSON() as Record<string, unknown>
+      await json(route, {
+        id: '01NEWDISPOSITION000000000001',
+        task_id: path.split('/')[4],
+        action,
+        reason: input.reason,
+        replacement_task_id: input.replacementTaskId ?? null,
+        previous_disposition_id: null,
+        created_at: now,
+      }, 201)
+      return
+    }
     if (path === '/api/v1/runs') {
       await json(route, [{
         id: runId,
@@ -647,6 +701,39 @@ test('verified handoff evidence remains readable on a narrow workflow register',
   await expect(page.getByText('已定位调度器写入边界并完成复现。')).toBeVisible()
   await expect(page.getByText('cargo test -p ba-scheduler 通过')).toBeVisible()
   await expect(page.getByText(/SHA-256 abcdef123456/)).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('obsolete tasks can be superseded and later restored without losing their decision log', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/workflows')
+
+  const activeRow = page.getByRole('row').filter({ hasText: '实现写入范围隔离' })
+  await activeRow.getByRole('button', { name: '整理' }).click()
+  await page.getByLabel('处理方式').selectOption('supersede')
+  await page.getByLabel('替代任务').selectOption('01LONGTASK000000000000000001')
+  await page.getByLabel('处理依据（必填）').fill('当前任务已由恢复边界更完整的新任务替代')
+  const supersedeRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === `/api/v1/tasks/${draftTaskId}/supersede`)
+  await page.getByRole('button', { name: '确认整理' }).click()
+  expect((await supersedeRequest).postDataJSON()).toEqual({
+    replacementTaskId: '01LONGTASK000000000000000001',
+    reason: '当前任务已由恢复边界更完整的新任务替代',
+  })
+  await expect(page.getByRole('status').filter({ hasText: '已标记为被替代' })).toBeVisible()
+
+  await page.getByRole('button', { name: '历史任务' }).click()
+  await expect(page.getByText('已被替代的旧任务')).toBeVisible()
+  await page.getByRole('button', { name: '处理记录' }).click()
+  await expect(page.locator('.disposition-log').getByText('新的恢复任务已经覆盖原执行边界')).toBeVisible()
+  await page.getByLabel('恢复依据').fill('需要重新比较历史方案')
+  const restoreRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/tasks/01INACTIVETASK0000000000001/restore')
+  await page.getByRole('button', { name: '恢复' }).click()
+  expect((await restoreRequest).postDataJSON()).toEqual({ reason: '需要重新比较历史方案' })
+  await expect(page.getByRole('status').filter({ hasText: '任务已恢复到当前登记表' })).toBeVisible()
   await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })

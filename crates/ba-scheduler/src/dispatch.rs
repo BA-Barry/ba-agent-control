@@ -8,7 +8,7 @@ use ba_store::SqliteStore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{SchedulerError, queue_blockers_for};
+use crate::{SchedulerError, TaskDispositionService, queue_blockers_for};
 
 /// Durable result of admitting and queueing one task.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,6 +60,7 @@ impl DispatchCoordinator {
         agent_profile_id: Option<&EntityId>,
         prompt: Option<String>,
     ) -> Result<DispatchBundle, SchedulerError> {
+        TaskDispositionService::new(self.store.clone()).ensure_active(task_id)?;
         let mut task = self
             .store
             .get_task(task_id)?

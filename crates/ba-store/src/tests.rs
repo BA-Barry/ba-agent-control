@@ -1,8 +1,8 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
 
 use ba_core::{
     Artifact, Dispatch, EntityId, Milestone, Project, ReceiptChainError, Run, RunStatus, Task,
-    TaskStatus, Workstream, now,
+    TaskDisposition, TaskDispositionAction, TaskStatus, Workstream, now,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -144,7 +144,7 @@ fn open_temp() -> Result<(TempDir, SqliteStore), Box<dyn std::error::Error>> {
 #[test]
 fn migrates_and_round_trips_entities() -> Result<(), Box<dyn std::error::Error>> {
     let (_temp, store) = open_temp()?;
-    assert_eq!(store.schema_version()?, 4);
+    assert_eq!(store.schema_version()?, 5);
     let project = project();
     let task = task(project.id.clone());
     store.upsert_project(&project)?;
@@ -171,6 +171,65 @@ fn state_transitions_are_checked_transactionally() -> Result<(), Box<dyn std::er
         store.get_task(&task.id)?.ok_or("task missing")?.status,
         TaskStatus::Draft
     );
+    assert_eq!(
+        store.transition_task(&task.id, TaskStatus::Ready)?.status,
+        TaskStatus::Ready
+    );
+    Ok(())
+}
+
+#[test]
+fn task_dispositions_are_append_only_and_block_hidden_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_temp, store) = open_temp()?;
+    let project = project();
+    let task = task(project.id.clone());
+    store.upsert_project(&project)?;
+    store.upsert_task(&task)?;
+    let archived = TaskDisposition {
+        id: EntityId::new(),
+        task_id: task.id.clone(),
+        action: TaskDispositionAction::Archived,
+        reason: "obsolete experiment".into(),
+        replacement_task_id: None,
+        previous_disposition_id: None,
+        created_at: now(),
+    };
+    store.append_task_disposition(&archived, None)?;
+    assert!(matches!(
+        store.transition_task(&task.id, TaskStatus::Ready),
+        Err(StoreError::TaskInactive(_))
+    ));
+
+    let competing = TaskDisposition {
+        id: EntityId::new(),
+        action: TaskDispositionAction::Restored,
+        reason: "competing decision".into(),
+        previous_disposition_id: None,
+        ..archived.clone()
+    };
+    assert!(matches!(
+        store.append_task_disposition(&competing, None),
+        Err(StoreError::ConcurrentTaskDisposition(_))
+    ));
+    let restored = TaskDisposition {
+        id: EntityId::new(),
+        action: TaskDispositionAction::Restored,
+        reason: "restore despite a regressed system clock".into(),
+        previous_disposition_id: Some(archived.id.clone()),
+        created_at: archived.created_at - Duration::from_secs(60),
+        ..archived.clone()
+    };
+    store.append_task_disposition(&restored, Some(&archived.id))?;
+    assert_eq!(
+        store
+            .get_current_task_disposition(&task.id)?
+            .map(|item| item.id),
+        Some(restored.id)
+    );
+    let history = store.list_task_dispositions(&task.id)?;
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].action, TaskDispositionAction::Restored);
     assert_eq!(
         store.transition_task(&task.id, TaskStatus::Ready)?.status,
         TaskStatus::Ready

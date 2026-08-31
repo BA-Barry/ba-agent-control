@@ -430,8 +430,14 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         ),
         definition(
             "task.list",
-            "List tasks and dependencies in a workstream.",
-            BTreeMap::from([("workstream_id", field("Workstream ULID"))]),
+            "List active tasks and dependencies in a workstream, with an explicit option to include archived or superseded history.",
+            BTreeMap::from([
+                ("workstream_id", field("Workstream ULID")),
+                (
+                    "include_inactive",
+                    json!({"type":"boolean","default":false,"description":"Include archived and superseded Tasks"}),
+                ),
+            ]),
             &["workstream_id"],
             true,
         ),
@@ -459,6 +465,44 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             ]),
             &["workstream_id", "title"],
             false,
+        ),
+        definition(
+            "task.archive",
+            "Hide an obsolete Task from the default active register without changing its Task status, Runs, events, gates, or receipts.",
+            BTreeMap::from([
+                ("task_id", field("Task ULID")),
+                ("reason", field("Required durable archival reason")),
+            ]),
+            &["task_id", "reason"],
+            false,
+        ),
+        definition(
+            "task.supersede",
+            "Hide an obsolete Task and preserve a reference to a verified same-project replacement without rewriting history.",
+            BTreeMap::from([
+                ("task_id", field("Task ULID")),
+                ("replacement_task_id", field("Replacement Task ULID")),
+                ("reason", field("Required durable supersede reason")),
+            ]),
+            &["task_id", "replacement_task_id", "reason"],
+            false,
+        ),
+        definition(
+            "task.restore",
+            "Restore an archived or superseded Task to the default active register while retaining its disposition history.",
+            BTreeMap::from([
+                ("task_id", field("Task ULID")),
+                ("reason", field("Required durable restoration reason")),
+            ]),
+            &["task_id", "reason"],
+            false,
+        ),
+        definition(
+            "task.disposition-history",
+            "Read append-only archive, supersede, and restore decisions for one Task.",
+            BTreeMap::from([("task_id", field("Task ULID"))]),
+            &["task_id"],
+            true,
         ),
         definition(
             "handoff.create",
@@ -762,6 +806,13 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "workflow.instantiate"));
         assert!(tools.iter().any(|tool| tool.name == "review-loop.start"));
         assert!(tools.iter().any(|tool| tool.name == "review-loop.decide"));
+        assert!(tools.iter().any(|tool| tool.name == "task.archive"));
+        assert!(tools.iter().any(|tool| tool.name == "task.supersede"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "task.disposition-history")
+        );
         assert!(tools.iter().any(|tool| tool.name == "handoff.create"));
         assert!(tools.iter().any(|tool| tool.name == "handoff.list"));
     }

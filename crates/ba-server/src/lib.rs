@@ -35,8 +35,9 @@ use ba_scheduler::{
     HandoffDraft, HandoffService, ProjectOnboardingMode, ProjectOnboardingRequest,
     ProjectOnboardingService, RecoveryAction, RecoveryCoordinator, ReviewRepairAction,
     ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
-    RuntimeCoordinator, SchedulerError, SchedulerPolicyService, WorkflowInstantiationRequest,
-    WorkflowTemplateService, configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
+    RuntimeCoordinator, SchedulerError, SchedulerPolicyService, TaskDispositionService,
+    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate, configured_gate_names,
+    ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
 use futures_util::Stream;
@@ -473,6 +474,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/milestones", get(list_milestones).post(create_milestone))
         .route("/tasks", get(list_tasks).post(create_task))
+        .route("/tasks/inactive", get(list_inactive_tasks))
+        .route("/tasks/{id}/dispositions", get(list_task_dispositions))
+        .route("/tasks/{id}/archive", post(archive_task))
+        .route("/tasks/{id}/supersede", post(supersede_task))
+        .route("/tasks/{id}/restore", post(restore_task))
         .route("/tasks/{id}/transition", post(transition_task))
         .route("/dispatches", post(create_dispatch))
         .route("/dispatches/queue", get(list_dispatch_queue))
@@ -1082,9 +1088,105 @@ async fn create_milestone(
 
 async fn list_tasks(
     State(state): State<AppState>,
-    Query(query): Query<ProjectQuery>,
+    Query(query): Query<TaskListQuery>,
 ) -> Result<Json<Vec<Task>>, ApiError> {
-    Ok(Json(state.store.list_tasks(&parse_id(&query.project_id)?)?))
+    let project_id = parse_id(&query.project_id)?;
+    let tasks = if query.include_inactive {
+        state.store.list_tasks(&project_id)?
+    } else {
+        TaskDispositionService::new(state.store)
+            .active_tasks(&project_id)
+            .map_err(task_disposition_error)?
+    };
+    Ok(Json(tasks))
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskListQuery {
+    project_id: String,
+    #[serde(default)]
+    include_inactive: bool,
+}
+
+async fn list_inactive_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<ba_core::InactiveTask>>, ApiError> {
+    TaskDispositionService::new(state.store)
+        .inactive_tasks(&parse_id(&query.project_id)?)
+        .map(Json)
+        .map_err(task_disposition_error)
+}
+
+async fn list_task_dispositions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ba_core::TaskDisposition>>, ApiError> {
+    TaskDispositionService::new(state.store)
+        .history(&parse_id(&id)?)
+        .map(Json)
+        .map_err(task_disposition_error)
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskDispositionReason {
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SupersedeTask {
+    replacement_task_id: String,
+    reason: String,
+}
+
+async fn archive_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<TaskDispositionReason>,
+) -> Result<(StatusCode, Json<ba_core::TaskDisposition>), ApiError> {
+    let record = TaskDispositionService::new(state.store)
+        .archive(&parse_id(&id)?, &input.reason)
+        .map_err(task_disposition_error)?;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+async fn supersede_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<SupersedeTask>,
+) -> Result<(StatusCode, Json<ba_core::TaskDisposition>), ApiError> {
+    let record = TaskDispositionService::new(state.store)
+        .supersede(
+            &parse_id(&id)?,
+            &parse_id(&input.replacement_task_id)?,
+            &input.reason,
+        )
+        .map_err(task_disposition_error)?;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+async fn restore_task(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<TaskDispositionReason>,
+) -> Result<(StatusCode, Json<ba_core::TaskDisposition>), ApiError> {
+    let record = TaskDispositionService::new(state.store)
+        .restore(&parse_id(&id)?, &input.reason)
+        .map_err(task_disposition_error)?;
+    Ok((StatusCode::CREATED, Json(record)))
+}
+
+fn task_disposition_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::TaskDispositionNotFound(_) => ApiError::not_found(error.to_string()),
+        SchedulerError::TaskDispositionConflict(_)
+        | SchedulerError::Store(
+            StoreError::ConcurrentTaskDisposition(_) | StoreError::TaskInactive(_),
+        ) => ApiError::conflict(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_request(error.to_string()),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2089,7 +2191,12 @@ impl ApiError {
 
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
-        Self::internal(error)
+        match error {
+            StoreError::ConcurrentTaskDisposition(_) | StoreError::TaskInactive(_) => {
+                Self::conflict(error.to_string())
+            }
+            _ => Self::internal(error),
+        }
     }
 }
 
@@ -2954,6 +3061,100 @@ mod tests {
         .err()
         .ok_or_else(|| std::io::Error::other("cross-project dependency was accepted"))?;
         assert_eq!(dependency_error.status, StatusCode::BAD_REQUEST);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_disposition_endpoints_hide_without_rewriting_task_state() -> anyhow::Result<()> {
+        let state = state()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Disposition API".into(),
+            root_path: "C:/disposition-api".into(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+        let make_task = |title: &str, status| Task {
+            id: EntityId::new(),
+            project_id: project.id.clone(),
+            workstream_id: None,
+            milestone_id: None,
+            title: title.into(),
+            description: String::new(),
+            status,
+            write: false,
+            path_scope: Vec::new(),
+            depends_on: Vec::new(),
+            agent_profile_id: None,
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        let obsolete = make_task("Obsolete investigation", TaskStatus::Blocked);
+        let replacement = make_task("Replacement investigation", TaskStatus::Draft);
+        state.store.upsert_task(&obsolete)?;
+        state.store.upsert_task(&replacement)?;
+
+        let (created, _) = archive_task(
+            State(state.clone()),
+            Path(obsolete.id.to_string()),
+            Json(TaskDispositionReason {
+                reason: "historical dead end".into(),
+            }),
+        )
+        .await?;
+        assert_eq!(created, StatusCode::CREATED);
+        let Json(active) = list_tasks(
+            State(state.clone()),
+            Query(TaskListQuery {
+                project_id: project.id.to_string(),
+                include_inactive: false,
+            }),
+        )
+        .await?;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, replacement.id);
+        assert!(matches!(
+            state.store.transition_task(&obsolete.id, TaskStatus::Ready),
+            Err(StoreError::TaskInactive(_))
+        ));
+
+        let _restored = restore_task(
+            State(state.clone()),
+            Path(obsolete.id.to_string()),
+            Json(TaskDispositionReason {
+                reason: "needed for comparison".into(),
+            }),
+        )
+        .await?;
+        let _superseded = supersede_task(
+            State(state.clone()),
+            Path(obsolete.id.to_string()),
+            Json(SupersedeTask {
+                replacement_task_id: replacement.id.to_string(),
+                reason: "replacement is actionable".into(),
+            }),
+        )
+        .await?;
+        let Json(inactive) = list_inactive_tasks(
+            State(state.clone()),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert_eq!(inactive.len(), 1);
+        assert_eq!(inactive[0].task.status, TaskStatus::Blocked);
+        let Json(history) =
+            list_task_dispositions(State(state), Path(obsolete.id.to_string())).await?;
+        assert_eq!(history.len(), 3);
+        assert_eq!(
+            history.first().map(|item| item.action),
+            Some(ba_core::TaskDispositionAction::Superseded)
+        );
         Ok(())
     }
 

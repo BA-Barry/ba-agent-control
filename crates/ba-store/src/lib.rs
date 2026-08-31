@@ -14,8 +14,8 @@ use std::{
 
 use ba_core::{
     AgentProfile, Approval, Artifact, Dispatch, EntityId, Gate, Milestone, Project, Receipt,
-    ReceiptChainError, ReceiptDraft, ReviewRepairLoop, Run, RunEvent, RunStatus, Task, TaskStatus,
-    Timestamp, Workstream, Worktree, compute_receipt_hash, now,
+    ReceiptChainError, ReceiptDraft, ReviewRepairLoop, Run, RunEvent, RunStatus, Task,
+    TaskDisposition, TaskStatus, Timestamp, Workstream, Worktree, compute_receipt_hash, now,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -26,11 +26,12 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use thiserror::Error;
 
-const CURRENT_SCHEMA_VERSION: u32 = 4;
+const CURRENT_SCHEMA_VERSION: u32 = 5;
 const MIGRATION_0001: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_scheduler_settings.sql");
 const MIGRATION_0003: &str = include_str!("../migrations/0003_task_assignments.sql");
 const MIGRATION_0004: &str = include_str!("../migrations/0004_review_repair_loops.sql");
+const MIGRATION_0005: &str = include_str!("../migrations/0005_task_dispositions.sql");
 
 /// Thread-safe handle to the process-wide SQLite database.
 #[derive(Clone, Debug)]
@@ -553,6 +554,82 @@ impl SqliteStore {
         )
     }
 
+    pub fn get_current_task_disposition(
+        &self,
+        task_id: &EntityId,
+    ) -> Result<Option<TaskDisposition>, StoreError> {
+        get_json(
+            &self.connection.lock(),
+            "SELECT head.data FROM task_dispositions head WHERE head.task_id=?1 AND NOT EXISTS (SELECT 1 FROM task_dispositions next WHERE next.previous_disposition_id=head.id) LIMIT 1",
+            params![task_id.as_str()],
+        )
+    }
+
+    pub fn list_task_dispositions(
+        &self,
+        task_id: &EntityId,
+    ) -> Result<Vec<TaskDisposition>, StoreError> {
+        list_json(
+            &self.connection.lock(),
+            "WITH RECURSIVE history(id,data,previous_disposition_id,depth) AS ( \
+               SELECT head.id,head.data,head.previous_disposition_id,0 FROM task_dispositions head \
+               WHERE head.task_id=?1 AND NOT EXISTS (SELECT 1 FROM task_dispositions next WHERE next.previous_disposition_id=head.id) \
+               UNION ALL SELECT previous.id,previous.data,previous.previous_disposition_id,history.depth+1 \
+               FROM task_dispositions previous JOIN history ON history.previous_disposition_id=previous.id) \
+             SELECT data FROM history ORDER BY depth",
+            params![task_id.as_str()],
+        )
+    }
+
+    pub fn list_current_task_dispositions(
+        &self,
+        project_id: &EntityId,
+    ) -> Result<Vec<TaskDisposition>, StoreError> {
+        list_json(
+            &self.connection.lock(),
+            "SELECT disposition.data FROM task_dispositions disposition \
+             JOIN tasks task ON task.id=disposition.task_id \
+             WHERE task.project_id=?1 AND NOT EXISTS ( \
+               SELECT 1 FROM task_dispositions next WHERE next.previous_disposition_id=disposition.id) \
+             ORDER BY disposition.created_at DESC,disposition.id DESC",
+            params![project_id.as_str()],
+        )
+    }
+
+    /// Append one immutable Task visibility decision if the caller observed the current head.
+    pub fn append_task_disposition(
+        &self,
+        item: &TaskDisposition,
+        expected_previous: Option<&EntityId>,
+    ) -> Result<(), StoreError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<TaskDisposition> = get_json(
+            &transaction,
+            "SELECT head.data FROM task_dispositions head WHERE head.task_id=?1 AND NOT EXISTS (SELECT 1 FROM task_dispositions next WHERE next.previous_disposition_id=head.id) LIMIT 1",
+            params![item.task_id.as_str()],
+        )?;
+        if current.as_ref().map(|record| &record.id) != expected_previous
+            || item.previous_disposition_id.as_ref() != expected_previous
+        {
+            return Err(StoreError::ConcurrentTaskDisposition(item.task_id.clone()));
+        }
+        transaction.execute(
+            "INSERT INTO task_dispositions(id,task_id,action,replacement_task_id,previous_disposition_id,created_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                item.id.as_str(),
+                item.task_id.as_str(),
+                item.action.as_str(),
+                optional_id(item.replacement_task_id.as_ref()),
+                optional_id(item.previous_disposition_id.as_ref()),
+                timestamp(item.created_at),
+                json(item)?
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn delete_task(&self, id: &EntityId) -> Result<bool, StoreError> {
         delete_by_id(&self.connection.lock(), "tasks", id)
     }
@@ -560,6 +637,7 @@ impl SqliteStore {
     pub fn transition_task(&self, id: &EntityId, next: TaskStatus) -> Result<Task, StoreError> {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
+        ensure_task_not_hidden(&transaction, id)?;
         let mut task: Task = required_json(
             &transaction,
             "SELECT data FROM tasks WHERE id=?1",
@@ -895,6 +973,7 @@ impl SqliteStore {
     ) -> Result<Task, StoreError> {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
+        ensure_task_not_hidden(&transaction, task_id)?;
         let mut task: Task = required_json(
             &transaction,
             "SELECT data FROM tasks WHERE id=?1",
@@ -1495,6 +1574,12 @@ fn migrate(connection: &mut Connection, from: u32) -> Result<(), StoreError> {
         transaction.pragma_update(None, "user_version", 4)?;
         transaction.commit()?;
     }
+    if from < 5 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_0005)?;
+        transaction.pragma_update(None, "user_version", 5)?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 
@@ -1526,6 +1611,23 @@ fn insert_receipt(
         "INSERT INTO receipts(id,project_id,task_id,run_id,chain_sequence,hash,previous_hash,created_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![receipt.id.as_str(),receipt.project_id.as_str(),optional_id(receipt.task_id.as_ref()),optional_id(receipt.run_id.as_ref()),sequence,receipt.hash,receipt.previous_hash,timestamp(receipt.created_at),json(receipt)?],
     )?;
+    Ok(())
+}
+
+fn ensure_task_not_hidden(
+    transaction: &Transaction<'_>,
+    task_id: &EntityId,
+) -> Result<(), StoreError> {
+    let action = transaction
+        .query_row(
+            "SELECT head.action FROM task_dispositions head WHERE head.task_id=?1 AND NOT EXISTS (SELECT 1 FROM task_dispositions next WHERE next.previous_disposition_id=head.id) LIMIT 1",
+            params![task_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if matches!(action.as_deref(), Some("archived" | "superseded")) {
+        return Err(StoreError::TaskInactive(task_id.clone()));
+    }
     Ok(())
 }
 
@@ -1628,6 +1730,10 @@ pub enum StoreError {
     InvalidEntityLink(&'static str),
     #[error("queue order must contain every queued dispatch exactly once")]
     InvalidQueueOrder,
+    #[error("task {0} disposition changed concurrently; reload and retry")]
+    ConcurrentTaskDisposition(EntityId),
+    #[error("task {0} is archived or superseded; restore it before mutation")]
+    TaskInactive(EntityId),
 }
 
 #[cfg(test)]

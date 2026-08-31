@@ -193,10 +193,36 @@ enum TaskCommand {
         #[arg(long)]
         agent_profile_id: Option<String>,
     },
-    /// List a project's tasks.
-    List { project_id: String },
+    /// List a project's active tasks, optionally including inactive history.
+    List {
+        project_id: String,
+        #[arg(long)]
+        include_inactive: bool,
+    },
     /// Transition a task through its validated lifecycle.
     Status { id: String, status: String },
+    /// Hide an obsolete task without changing its lifecycle status.
+    Archive {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Hide an obsolete task and preserve its same-project replacement reference.
+    Supersede {
+        id: String,
+        #[arg(long)]
+        replacement_task_id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Restore an archived or superseded task to the default active register.
+    Restore {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Read append-only archive, supersede, and restore decisions.
+    DispositionHistory { id: String },
     /// Persist a structured handoff for directly dependent downstream tasks.
     HandoffCreate {
         source_task_id: String,
@@ -487,6 +513,46 @@ mod tests {
         assert_eq!(depends_on, [dependency_id]);
         assert!(write);
         assert_eq!(path_scope, ["apps/console/**"]);
+        Ok(())
+    }
+
+    #[test]
+    fn task_disposition_commands_require_reason_and_replacement() -> anyhow::Result<()> {
+        let task_id = "01K00000000000000000000000";
+        let replacement_id = "01K00000000000000000000001";
+        let listed = Cli::try_parse_from([
+            "ba-agent-control",
+            "task",
+            "list",
+            task_id,
+            "--include-inactive",
+        ])?;
+        assert!(matches!(
+            listed.command,
+            Command::Task(TaskArgs {
+                command: TaskCommand::List {
+                    include_inactive: true,
+                    ..
+                }
+            })
+        ));
+        let superseded = Cli::try_parse_from([
+            "ba-agent-control",
+            "task",
+            "supersede",
+            task_id,
+            "--replacement-task-id",
+            replacement_id,
+            "--reason",
+            "replaced by verified work",
+        ])?;
+        assert!(matches!(
+            superseded.command,
+            Command::Task(TaskArgs {
+                command: TaskCommand::Supersede { replacement_task_id, reason, .. }
+            }) if replacement_task_id == replacement_id && reason == "replaced by verified work"
+        ));
+        assert!(Cli::try_parse_from(["ba-agent-control", "task", "archive", task_id]).is_err());
         Ok(())
     }
 

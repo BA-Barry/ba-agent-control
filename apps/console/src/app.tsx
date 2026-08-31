@@ -49,6 +49,7 @@ import {
 } from 'react'
 
 import {
+  archiveTask,
   cancelRun,
   cancelDispatch,
   createMilestone,
@@ -58,19 +59,23 @@ import {
   dispatchTask,
   instantiateWorkflow,
   loadHandoffs,
+  loadInactiveTasks,
   loadReviewRepairLoops,
+  loadTaskDispositionHistory,
   loadWorkflowTemplates,
   loadConsoleSnapshot,
   materializeWorkflowTemplate,
   messageRun,
   onboardProject,
   reorderDispatchQueue,
+  restoreTask,
   respondApproval,
   retryRun,
   runConfiguredGate,
   setGlobalConcurrency,
   setProjectConcurrency,
   subscribeRunEvents,
+  supersedeTask,
   verifyReceipts,
   type EventStreamState,
 } from './api/console'
@@ -658,6 +663,80 @@ function WorkflowTemplateRegister({
   </div>
 }
 
+function TaskDispositionPanel({
+  task,
+  tasks,
+  csrfToken,
+  onClose,
+  onCompleted,
+}: {
+  task: TaskSummary
+  tasks: TaskSummary[]
+  csrfToken: string | null
+  onClose: () => void
+  onCompleted: (message: string) => void
+}) {
+  const text = useText()
+  const [mode, setMode] = useState<'archive' | 'supersede'>('archive')
+  const [reason, setReason] = useState('')
+  const [replacementTaskId, setReplacementTaskId] = useState('')
+  const replacements = tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.id !== task.id && candidate.status !== 'cancelled')
+  useEffect(() => {
+    if (!replacements.some((candidate) => candidate.id === replacementTaskId)) setReplacementTaskId(replacements[0]?.id ?? '')
+  }, [replacementTaskId, replacements])
+  const mutation = useMutation({
+    mutationFn: () => {
+      if (!csrfToken) throw new Error(text('本地项目会话不可用。', 'The local project session is unavailable.'))
+      if (mode === 'supersede') {
+        if (!replacementTaskId) throw new Error(text('请选择替代任务。', 'Choose a replacement task.'))
+        return supersedeTask(task.id, replacementTaskId, reason.trim(), csrfToken)
+      }
+      return archiveTask(task.id, reason.trim(), csrfToken)
+    },
+    onSuccess: () => onCompleted(mode === 'archive'
+      ? text(`${task.code} 已移入历史任务。`, `${task.code} moved to task history.`)
+      : text(`${task.code} 已标记为被替代。`, `${task.code} marked as superseded.`)),
+  })
+  return <form className="operation-panel disposition-panel" onSubmit={(event) => { event.preventDefault(); mutation.mutate() }}>
+    <header><span className="measure-label">TASK DISPOSITION</span><h3>{text(`整理 ${task.code}`, `Reconcile ${task.code}`)}</h3><p>{text(task.title, task.titleEn)}</p></header>
+    <div className="operation-fields">
+      <label>{text('处理方式', 'Disposition')}<select value={mode} onChange={(event) => setMode(event.target.value as 'archive' | 'supersede')}><option value="archive">{text('归档为历史任务', 'Archive as historical')}</option><option value="supersede">{text('标记为已被替代', 'Mark as superseded')}</option></select></label>
+      {mode === 'supersede' && <label>{text('替代任务', 'Replacement task')}<select required value={replacementTaskId} onChange={(event) => setReplacementTaskId(event.target.value)}><option value="">{text('请选择', 'Choose')}</option>{replacements.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.code} · {text(candidate.title, candidate.titleEn)}</option>)}</select></label>}
+      <label className="wide-field">{text('处理依据（必填）', 'Disposition rationale (required)')}<textarea required minLength={1} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={text('说明为何不再作为当前执行任务', 'Explain why this is no longer an active execution task')} /></label>
+    </div>
+    {mutation.isError && <p className="operation-feedback is-error" role="alert">{mutation.error instanceof Error ? mutation.error.message : text('任务整理失败。', 'Task reconciliation failed.')}</p>}
+    <footer><span>{text('原任务状态、Run、事件、质量门和收据保持不变；系统不会自动改写依赖关系。', 'The original status, runs, events, gates, and receipts remain unchanged; dependencies are not rewritten automatically.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={mutation.isPending} onClick={onClose}>{text('取消', 'Cancel')}</button><button className="field-action primary" type="submit" disabled={mutation.isPending || !reason.trim() || (mode === 'supersede' && !replacementTaskId)}>{mutation.isPending ? text('记录中…', 'Recording…') : text('确认整理', 'Confirm disposition')}</button></div></footer>
+  </form>
+}
+
+function TaskHistoryPanel({ projectId, csrfToken, onChanged }: { projectId: string; csrfToken: string | null; onChanged: (message: string) => void }) {
+  const text = useText()
+  const queryCache = useQueryClient()
+  const [selectedTaskId, setSelectedTaskId] = useState('')
+  const [restoreReasons, setRestoreReasons] = useState<Record<string, string>>({})
+  const inactiveQuery = useQuery({ queryKey: ['inactive-tasks', projectId], queryFn: () => loadInactiveTasks(projectId), enabled: Boolean(projectId) })
+  const historyQuery = useQuery({ queryKey: ['task-dispositions', selectedTaskId], queryFn: () => loadTaskDispositionHistory(selectedTaskId), enabled: Boolean(selectedTaskId) })
+  const restoreMutation = useMutation({
+    mutationFn: (taskId: string) => {
+      if (!csrfToken) throw new Error(text('本地项目会话不可用。', 'The local project session is unavailable.'))
+      return restoreTask(taskId, restoreReasons[taskId]?.trim() ?? '', csrfToken)
+    },
+    onSuccess: async (_, taskId) => {
+      setSelectedTaskId('')
+      setRestoreReasons((current) => ({ ...current, [taskId]: '' }))
+      await Promise.all([
+        queryCache.invalidateQueries({ queryKey: ['inactive-tasks', projectId] }),
+        queryCache.invalidateQueries({ queryKey: ['console-snapshot'] }),
+      ])
+      onChanged(text('任务已恢复到当前登记表。', 'Task restored to the active register.'))
+    },
+  })
+  return <section className="operation-panel task-history-panel"><header><span className="measure-label">TASK HISTORY</span><h3>{text('历史任务登记', 'Historical task register')}</h3><p>{text('这里仅隐藏已归档或被替代的任务，不删除任何运行与质量证据。', 'This view hides archived or superseded tasks without deleting run or quality evidence.')}</p></header>
+    {inactiveQuery.isPending ? <div className="template-loading" role="status">{text('正在读取历史任务…', 'Loading task history…')}</div> : inactiveQuery.isError ? <p className="operation-feedback is-error" role="alert">{inactiveQuery.error instanceof Error ? inactiveQuery.error.message : text('历史任务不可用。', 'Task history is unavailable.')}</p> : inactiveQuery.data?.length ? <div className="task-history-register">{inactiveQuery.data.map((item) => <article key={item.id}><div className="history-summary"><span className="measure-label">{item.disposition.action.toUpperCase()}</span><strong>{item.title}</strong><small><StatusText status={item.status} /> · {new Date(item.disposition.createdAt).toLocaleString()}</small><p>{item.disposition.reason}</p>{item.disposition.replacementTaskId && <code>{text('替代任务', 'Replacement')} · {item.disposition.replacementTaskId}</code>}</div><div className="history-actions"><label>{text('恢复依据', 'Restore rationale')}<input value={restoreReasons[item.id] ?? ''} onChange={(event) => setRestoreReasons((current) => ({ ...current, [item.id]: event.target.value }))} /></label><div className="panel-actions"><button className="field-action compact" type="button" aria-expanded={selectedTaskId === item.id} onClick={() => setSelectedTaskId((current) => current === item.id ? '' : item.id)}>{text('处理记录', 'Decision log')}</button><button className="field-action compact primary" type="button" disabled={restoreMutation.isPending || !restoreReasons[item.id]?.trim()} onClick={() => restoreMutation.mutate(item.id)}>{text('恢复', 'Restore')}</button></div></div>{selectedTaskId === item.id && <div className="disposition-log">{historyQuery.isPending ? text('读取中…', 'Loading…') : historyQuery.isError ? text('处理记录读取失败。', 'Decision log failed to load.') : historyQuery.data?.map((entry) => <p key={entry.id}><b>{entry.action}</b><span>{entry.reason}</span><small className="mono">{new Date(entry.createdAt).toLocaleString()} · {entry.id}</small></p>)}</div>}</article>)}</div> : <EmptyRegister titleZh="历史任务为空" titleEn="Task history is empty" detailZh="归档或替代旧任务后，它们会保留原状态与证据并出现在这里。" detailEn="Archived or superseded tasks appear here with their original state and evidence intact." />}
+    {restoreMutation.isError && <p className="operation-feedback is-error" role="alert">{restoreMutation.error instanceof Error ? restoreMutation.error.message : text('任务恢复失败。', 'Task restore failed.')}</p>}
+  </section>
+}
+
 function WorkflowsPage() {
   const text = useText()
   const { data } = useConsoleSnapshot()
@@ -665,6 +744,7 @@ function WorkflowsPage() {
   const [formOpen, setFormOpen] = useState(false)
   const [templateOpen, setTemplateOpen] = useState(false)
   const [loopOpen, setLoopOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [projectId, setProjectId] = useState(data.activeProjectId ?? '')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -685,6 +765,7 @@ function WorkflowsPage() {
   const [dispatchTaskId, setDispatchTaskId] = useState('')
   const [profileId, setProfileId] = useState('')
   const [handoffTaskId, setHandoffTaskId] = useState('')
+  const [dispositionTaskId, setDispositionTaskId] = useState('')
   const templateQuery = useQuery({
     queryKey: ['workflow-templates', projectId],
     queryFn: () => loadWorkflowTemplates(projectId),
@@ -732,6 +813,7 @@ function WorkflowsPage() {
     onError: (error) => setFeedback(error instanceof Error ? error.message : text('取消排队任务失败。', 'Queued dispatch cancellation failed.')),
   })
   const dispatchCandidate = data.tasks.find((task) => task.id === dispatchTaskId)
+  const dispositionCandidate = data.tasks.find((task) => task.id === dispositionTaskId)
   const compatibleProfiles = dispatchCandidate?.write
     ? data.agentProfiles.filter((profile) => profile.sandboxMode === 'workspace-write')
     : data.agentProfiles
@@ -885,7 +967,9 @@ function WorkflowsPage() {
     setFormOpen(false)
     setTemplateOpen(false)
     setLoopOpen(false)
+    setHistoryOpen(false)
     setHandoffTaskId('')
+    setDispositionTaskId('')
     setFeedback('')
     setDispatchTaskId(task.id)
     const profiles = task.write
@@ -893,6 +977,16 @@ function WorkflowsPage() {
       : data.agentProfiles
     setProfileId(profiles.find((profile) => profile.id === task.agentProfileId)?.id ?? recommendProfile(task, profiles)?.id ?? '')
   }, [data.agentProfiles])
+  const beginDisposition = useCallback((task: TaskSummary) => {
+    setFormOpen(false)
+    setTemplateOpen(false)
+    setLoopOpen(false)
+    setHistoryOpen(false)
+    setDispatchTaskId('')
+    setHandoffTaskId('')
+    setFeedback('')
+    setDispositionTaskId(task.id)
+  }, [])
   const columns = useMemo(() => [
     columnHelper.accessor('code', { header: text('测站', 'Station'), cell: (info) => <b className="mono accent-green">{info.getValue()}</b> }),
     columnHelper.accessor('title', { header: text('任务 / 范围', 'Task / scope'), cell: (info) => <span className="task-title-cell"><strong>{text(info.getValue(), info.row.original.titleEn)}</strong><small className="mono">{info.row.original.scope}</small></span> }),
@@ -913,9 +1007,10 @@ function WorkflowsPage() {
           : task.status !== 'draft' && task.status !== 'ready'
             ? text(`当前状态 ${task.status} 不可派发`, `Status ${task.status} cannot be dispatched`)
             : text('选择角色并派发', 'Choose a role and dispatch')
-      return <span className="task-actions"><button className="field-action compact" type="button" disabled={!eligible || dispatchMutation.isPending} title={reason} aria-expanded={dispatchTaskId === task.id} onClick={() => beginDispatch(task)}><Play size={14} />{text('派发', 'Dispatch')}</button><button className="field-action compact" type="button" disabled={data.source !== 'live'} aria-expanded={handoffTaskId === task.id} onClick={() => { setDispatchTaskId(''); setHandoffTaskId((current) => current === task.id ? '' : task.id) }}><ClipboardText size={14} />{text('交接', 'Handoffs')}</button></span>
+      const dispositionEligible = data.source === 'live' && !['queued', 'running', 'review'].includes(task.status)
+      return <span className="task-actions"><button className="field-action compact" type="button" disabled={!eligible || dispatchMutation.isPending} title={reason} aria-expanded={dispatchTaskId === task.id} onClick={() => beginDispatch(task)}><Play size={14} />{text('派发', 'Dispatch')}</button><button className="field-action compact" type="button" disabled={data.source !== 'live'} aria-expanded={handoffTaskId === task.id} onClick={() => { setDispatchTaskId(''); setDispositionTaskId(''); setHandoffTaskId((current) => current === task.id ? '' : task.id) }}><ClipboardText size={14} />{text('交接', 'Handoffs')}</button><button className="field-action compact" type="button" disabled={!dispositionEligible} title={!dispositionEligible ? text('排队、运行或审查中的任务不能整理', 'Queued, running, or review tasks cannot be reconciled') : undefined} aria-expanded={dispositionTaskId === task.id} onClick={() => beginDisposition(task)}>{text('整理', 'Reconcile')}</button></span>
     } }),
-  ], [beginDispatch, data.runtime.available, data.source, dispatchMutation.isPending, dispatchTaskId, handoffTaskId, text])
+  ], [beginDispatch, beginDisposition, data.runtime.available, data.source, dispatchMutation.isPending, dispatchTaskId, dispositionTaskId, handoffTaskId, text])
   const table = useReactTable({ data: data.tasks, columns, getCoreRowModel: getCoreRowModel() })
   const dependentTask = data.tasks.find((task) => task.dependencies.length > 0)
   const downstreamTask = dependentTask
@@ -930,8 +1025,10 @@ function WorkflowsPage() {
   }
   const action = data.source === 'demo'
     ? <DemoActionButton primary labelZh="新建任务" labelEn="New task" messageZh="演示模式：任务创建向导尚未启动。" messageEn="Demo mode: the task-creation flow was not started." />
-    : <><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={loopOpen} onClick={() => { setLoopOpen((value) => !value); setTemplateOpen(false); setFormOpen(false); setDispatchTaskId(''); setHandoffTaskId('') }}>{loopOpen ? text('收起闭环', 'Close loop') : text('审查修复闭环', 'Review/repair loop')}</button><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={templateOpen} onClick={() => { setTemplateOpen((value) => !value); setLoopOpen(false); setFormOpen(false); setDispatchTaskId(''); setHandoffTaskId('') }}>{templateOpen ? text('收起模板', 'Close templates') : text('从模板创建', 'Create from template')}</button><button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => { setFormOpen((value) => !value); setLoopOpen(false); setTemplateOpen(false); setDispatchTaskId(''); setHandoffTaskId('') }}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button></>
+    : <><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={historyOpen} onClick={() => { setHistoryOpen((value) => !value); setLoopOpen(false); setTemplateOpen(false); setFormOpen(false); setDispatchTaskId(''); setDispositionTaskId(''); setHandoffTaskId('') }}>{historyOpen ? text('收起历史', 'Close history') : text('历史任务', 'Task history')}</button><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={loopOpen} onClick={() => { setLoopOpen((value) => !value); setHistoryOpen(false); setTemplateOpen(false); setFormOpen(false); setDispatchTaskId(''); setDispositionTaskId(''); setHandoffTaskId('') }}>{loopOpen ? text('收起闭环', 'Close loop') : text('审查修复闭环', 'Review/repair loop')}</button><button className="field-action" type="button" disabled={data.projects.length === 0} aria-expanded={templateOpen} onClick={() => { setTemplateOpen((value) => !value); setHistoryOpen(false); setLoopOpen(false); setFormOpen(false); setDispatchTaskId(''); setDispositionTaskId(''); setHandoffTaskId('') }}>{templateOpen ? text('收起模板', 'Close templates') : text('从模板创建', 'Create from template')}</button><button className="field-action primary" type="button" disabled={data.projects.length === 0} aria-expanded={formOpen} onClick={() => { setFormOpen((value) => !value); setHistoryOpen(false); setLoopOpen(false); setTemplateOpen(false); setDispatchTaskId(''); setDispositionTaskId(''); setHandoffTaskId('') }}>{formOpen ? text('收起', 'Close') : text('新建任务', 'New task')}</button></>
   return <section className="register-page"><PageHeader titleZh="工作流与任务导线" titleEn="Workflow and task traverse" descriptionZh="依赖、写入范围、角色与质量门在同一登记面上保持可见。" descriptionEn="Dependencies, write scopes, roles, and gates remain visible in one register." action={action} />
+    {historyOpen && <TaskHistoryPanel projectId={projectId} csrfToken={data.csrfToken} onChanged={setFeedback} />}
+    {dispositionCandidate && <TaskDispositionPanel key={dispositionCandidate.id} task={dispositionCandidate} tasks={data.tasks} csrfToken={data.csrfToken} onClose={() => setDispositionTaskId('')} onCompleted={async (message) => { setFeedback(message); setDispositionTaskId(''); await Promise.all([queryCache.invalidateQueries({ queryKey: ['console-snapshot'] }), queryCache.invalidateQueries({ queryKey: ['inactive-tasks', projectId] })]) }} />}
     {templateOpen && <section className="operation-panel workflow-template-panel"><header><span className="measure-label">WORKFLOW TEMPLATE</span><h3>{text('创建完整任务链', 'Create a complete task chain')}</h3><p>{text('模板一次性登记依赖、角色和验收边界。写任务仍只允许进入声明的仓库相对路径。', 'A template records dependencies, roles, and acceptance boundaries atomically. Writers remain limited to declared repository-relative paths.')}</p></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => { setProjectId(event.target.value); setSelectedTemplateId('') }}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选）', 'Workstream name (optional)')}<input value={templateWorkstreamName} onChange={(event) => setTemplateWorkstreamName(event.target.value)} placeholder={selectedTemplate ? text(selectedTemplate.name_zh, selectedTemplate.name_en) : ''} /></label></div>{templateQuery.isPending ? <div className="template-loading" role="status">{text('正在测绘模板目录…', 'Surveying the template catalog…')}</div> : templateQuery.isError ? <p className="operation-feedback is-error" role="alert">{templateQuery.error instanceof Error ? templateQuery.error.message : text('模板目录不可用。', 'Template catalog is unavailable.')}</p> : <WorkflowTemplateRegister templates={templateQuery.data?.templates ?? []} selectedId={selectedTemplateId} onSelect={setSelectedTemplateId} />}{templateQuery.data?.diagnostics.map((diagnostic) => <p className="template-diagnostic" key={`${diagnostic.path}:${diagnostic.error}`}><WarningCircle size={16} aria-hidden="true" /><span><strong>{diagnostic.path}</strong>{diagnostic.error}</span></p>)}{selectedTemplate && <div className="template-definition"><div><span className="measure-label">TASK CHAIN</span><ol>{selectedTemplate.tasks.map((task) => <li key={task.key}><b className="mono">{task.key}</b><span><strong>{text(task.title_zh, task.title_en)}</strong><small>{text(roleCopy[task.role]?.zh ?? task.role, roleCopy[task.role]?.en ?? task.role)}{task.depends_on.length > 0 ? ` · ← ${task.depends_on.join(', ')}` : ''}</small></span>{task.write ? <i>{text('写入', 'write')}</i> : <i>{text('只读', 'read')}</i>}</li>)}</ol></div>{templateNeedsWriteScope && <label>{text('共享写入范围（逗号或换行分隔）', 'Shared write scope (comma or newline separated)')}<textarea required className="mono" value={templateScope} onChange={(event) => setTemplateScope(event.target.value)} placeholder="crates/ba-scheduler/**, apps/console/**" /><small>{text('每个写任务会进入独立 worktree；范围重叠时默认串行。', 'Each writer gets an isolated worktree; overlapping scopes serialize by default.')}</small></label>}</div>}<footer><span>{text('“复制到项目”只创建可编辑 TOML，不会覆盖已有文件。', '“Copy to project” creates an editable TOML file and never overwrites an existing file.')}</span><div className="panel-actions"><button className="field-action" type="button" disabled={!selectedTemplate || selectedTemplate.origin !== 'builtin' || materializeMutation.isPending} onClick={() => materializeMutation.mutate()}>{materializeMutation.isPending ? text('复制中…', 'Copying…') : text('复制到项目', 'Copy to project')}</button><button className="field-action primary" type="button" disabled={!selectedTemplate || instantiateMutation.isPending || (templateNeedsWriteScope && !templateScope.trim())} onClick={() => instantiateMutation.mutate()}>{instantiateMutation.isPending ? text('创建中…', 'Creating…') : text('创建任务链', 'Create task chain')}</button></div></footer></section>}
     {loopOpen && <form className="operation-panel review-loop-panel" onSubmit={(event) => { event.preventDefault(); createLoopMutation.mutate() }}><header><span className="measure-label">BOUNDED REVIEW LOOP</span><h3>{text('创建受控审查—修复闭环', 'Create a controlled review/repair loop')}</h3><p>{text('先生成实现、测试和独立审查；每次审查完成后由你决定通过、修复或阻塞。最多允许三轮修复。', 'Creates implementation, testing, and independent review first. After each review, you decide to accept, repair, or block. At most three repairs are allowed.')}</p></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('最多修复轮数', 'Maximum repairs')}<select value={loopMaxRepairs} onChange={(event) => setLoopMaxRepairs(Number(event.target.value))}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label><label className="wide-field">{text('闭环名称', 'Loop title')}<input required value={loopTitle} onChange={(event) => setLoopTitle(event.target.value)} /></label><label className="wide-field">{text('目标与验收边界', 'Objective and acceptance boundary')}<textarea required value={loopObjective} onChange={(event) => setLoopObjective(event.target.value)} /></label><label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={loopScope} onChange={(event) => setLoopScope(event.target.value)} placeholder="crates/ba-scheduler/**, apps/console/**" /></label></div><footer><span>{text('修复阶段只会在你的明确决定后生成，并保留每轮独立任务、Run、质量门和交接证据。', 'Repair stages are generated only after your explicit decision, preserving separate tasks, runs, gates, and handoff evidence for every iteration.')}</span><button className="field-action primary" type="submit" disabled={createLoopMutation.isPending || !loopTitle.trim() || !loopObjective.trim() || !loopScope.trim()}>{createLoopMutation.isPending ? text('创建中…', 'Creating…') : text('创建闭环', 'Create loop')}</button></footer></form>}
     {formOpen && <form className="operation-panel" onSubmit={(event) => { event.preventDefault(); createMutation.mutate() }}><header><span className="measure-label">NEW STATION</span><h3>{text('创建任务草稿', 'Create a task draft')}</h3></header><div className="operation-fields"><label>{text('项目', 'Project')}<select required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{data.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>{text('工作流名称（可选新建）', 'New workstream name (optional)')}<input value={workstreamName} onChange={(event) => setWorkstreamName(event.target.value)} /></label><label>{text('负责角色', 'Assigned role')}<select required value={assignedProfileId} onChange={(event) => setAssignedProfileId(event.target.value)}>{data.agentProfiles.filter((profile) => !write || profile.sandboxMode === 'workspace-write').map((profile) => { const copy = profileCopy(profile); return <option key={profile.id} value={profile.id}>{text(copy.zh, copy.en)}</option> })}</select></label><label className="wide-field">{text('前置任务（可多选）', 'Dependencies (multiple)')}<select multiple value={dependencyIds} onChange={(event) => setDependencyIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{data.tasks.filter((task) => task.projectId === projectId).map((task) => <option key={task.id} value={task.id}>{task.code} · {text(task.title, task.titleEn)}</option>)}</select></label><label className="wide-field">{text('任务标题', 'Task title')}<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label className="wide-field">{text('说明与验收', 'Description and acceptance')}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label><label className="check-field"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} />{text('需要写入仓库', 'Writes to the repository')}</label>{write && <label className="wide-field">{text('允许写入范围（逗号或换行分隔）', 'Allowed write scopes (comma or newline separated)')}<textarea required className="mono" value={scope} onChange={(event) => setScope(event.target.value)} placeholder="apps/console/**" /></label>}</div><footer><span>{text('角色会随任务持久保存；派发时默认沿用，仍允许人工调整。', 'The role is stored with the task and reused by default at dispatch; it may still be adjusted manually.')}</span><button className="field-action primary" type="submit" disabled={createMutation.isPending || !assignedProfileId || (write && !scope.trim())}>{createMutation.isPending ? text('创建中…', 'Creating…') : text('创建草稿', 'Create draft')}</button></footer></form>}

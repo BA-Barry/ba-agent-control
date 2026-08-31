@@ -49,6 +49,25 @@ ba-agent-control project create "G:\全新项目" --name "新项目"
 7. 在“质量与收据”运行项目配置的格式、lint、类型、测试、秘密扫描和 diff 审查。所有必需门禁通过后，写任务才会生成本地提交、`ba/<workstream>/<task-id>` 分支和永久收据。
 8. 在“设置与适配器”调整全局共享上限和各项目上限。项目值不得高于全局值；降低上限不会中断已经运行的任务，只影响后续准入。
 
+## 整理历史任务
+
+如果一个早期任务已经过时，但它的原 Run 并未真实完成，不要把状态伪造为 `completed`。在“工作流与任务”找到该行，选择“整理”，填写处理依据后执行以下一种操作：
+
+- “归档为历史任务”：从默认活动登记表隐藏；
+- “标记为已被替代”：同时记录同项目中的替代任务；
+- “历史任务”：查看原状态和全部处理记录，填写恢复依据后可恢复到活动登记表。
+
+归档、替代和恢复都是独立的追加记录。它们不会改写 Task 状态、依赖、Run、事件、质量门或收据。排队、运行、审查中的任务，以及仍被可见未完成下游依赖的任务，不能整理；先处理执行或依赖关系。系统也不会自动把下游依赖改接到替代任务。
+
+```powershell
+ba-agent-control task list <PROJECT_ID>
+ba-agent-control task list <PROJECT_ID> --include-inactive
+ba-agent-control task archive <TASK_ID> --reason "早期方案已停止使用"
+ba-agent-control task supersede <TASK_ID> --replacement-task-id <NEW_TASK_ID> --reason "新任务覆盖完整恢复边界"
+ba-agent-control task disposition-history <TASK_ID>
+ba-agent-control task restore <TASK_ID> --reason "需要重新比较历史方案"
+```
+
 ## 工作流模板与 Agent 交接
 
 六个内置模板随二进制提供，不依赖网络。项目可以在 `.ba-agent/workflows/` 保存同名 TOML 作为显式覆盖；控制台的“复制到项目”或 CLI `materialize` 只创建新文件，已有文件会被拒绝覆盖。实例化是一个 SQLite 事务：工作流或任一任务写入失败时，整条任务链都会回滚。

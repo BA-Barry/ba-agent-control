@@ -10,6 +10,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Instantiate six editable workflow templates as atomic task graphs with durable role assignments, acceptance criteria, dependencies, and declared write scopes.
 - Preserve structured Agent handoffs as repository-owned canonical JSON; verified outcomes, evidence, risks, and next steps are injected into directly dependent downstream runs.
 - Run a durable, user-controlled implement → test → review → repair → confirmation loop with one to three bounded repair rounds and preserved decision evidence.
+- Archive or supersede obsolete durable tasks without rewriting lifecycle evidence, inspect their append-only decision history, and restore them when needed.
 - Dispatch Codex-backed runs with capability detection and structured event capture.
 - Share a durable global run pool across projects (default four), apply project-specific caps, and automatically start queued work in dependency/submission order while serializing overlapping writers.
 - Isolate writes in Git worktrees and protect path scopes.

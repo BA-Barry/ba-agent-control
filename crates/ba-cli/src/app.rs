@@ -15,7 +15,7 @@ use ba_scheduler::{
     GateDefinition, HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
     ProjectOnboardingRequest, ProjectOnboardingService, ReviewRepairAction,
     ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
-    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
+    TaskDispositionService, WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
     ensure_builtin_agent_profiles,
 };
 use ba_store::SqliteStore;
@@ -395,7 +395,18 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
             store.upsert_task(&item)?;
             emit(&item, json)
         }
-        TaskCommand::List { project_id } => emit(&store.list_tasks(&id_of(&project_id)?)?, json),
+        TaskCommand::List {
+            project_id,
+            include_inactive,
+        } => {
+            let project_id = id_of(&project_id)?;
+            let tasks = if include_inactive {
+                store.list_tasks(&project_id)?
+            } else {
+                TaskDispositionService::new(store).active_tasks(&project_id)?
+            };
+            emit(&tasks, json)
+        }
         TaskCommand::Status { id, status } => {
             let status = TaskStatus::from_str(&status)?;
             let id = id_of(&id)?;
@@ -407,6 +418,30 @@ pub async fn task(paths: &DataPaths, command: TaskCommand, json: bool) -> anyhow
             .await?;
             emit(&value, json)
         }
+        TaskCommand::Archive { id, reason } => emit(
+            &TaskDispositionService::new(store).archive(&id_of(&id)?, &reason)?,
+            json,
+        ),
+        TaskCommand::Supersede {
+            id,
+            replacement_task_id,
+            reason,
+        } => emit(
+            &TaskDispositionService::new(store).supersede(
+                &id_of(&id)?,
+                &id_of(&replacement_task_id)?,
+                &reason,
+            )?,
+            json,
+        ),
+        TaskCommand::Restore { id, reason } => emit(
+            &TaskDispositionService::new(store).restore(&id_of(&id)?, &reason)?,
+            json,
+        ),
+        TaskCommand::DispositionHistory { id } => emit(
+            &TaskDispositionService::new(store).history(&id_of(&id)?)?,
+            json,
+        ),
         TaskCommand::HandoffCreate {
             source_task_id,
             source_run_id,

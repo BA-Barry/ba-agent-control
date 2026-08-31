@@ -51,6 +51,28 @@ export interface TaskSummary {
   write: boolean
 }
 
+export type TaskDispositionAction = 'archived' | 'superseded' | 'restored'
+
+export interface TaskDispositionSummary {
+  id: string
+  taskId: string
+  action: TaskDispositionAction
+  reason: string
+  replacementTaskId: string | null
+  previousDispositionId: string | null
+  createdAt: string
+}
+
+export interface InactiveTaskSummary {
+  id: string
+  projectId: string
+  title: string
+  status: TaskStatus
+  write: boolean
+  scope: string
+  disposition: TaskDispositionSummary
+}
+
 export interface WorkflowTemplateTask {
   key: string
   title_zh: string

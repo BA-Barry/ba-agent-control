@@ -11,8 +11,8 @@ use ba_scheduler::{
     HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
     ProjectOnboardingRequest, ProjectOnboardingService, ReviewRepairAction,
     ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
-    RuntimeCoordinator, SchedulerPolicyService, WorkflowInstantiationRequest,
-    WorkflowTemplateService, configured_gate,
+    RuntimeCoordinator, SchedulerPolicyService, TaskDispositionService,
+    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
 };
 use ba_store::SqliteStore;
 use serde_json::{Value, json};
@@ -63,7 +63,9 @@ impl StoreBackend {
                 let project = self.store.get_project(&id)?.context("project not found")?;
                 let workstreams = self.store.list_workstreams(&id)?;
                 let milestones = self.store.list_milestones(&id)?;
-                let tasks = self.store.list_tasks(&id)?;
+                let disposition_service = TaskDispositionService::new(self.store.clone());
+                let tasks = disposition_service.active_tasks(&id)?;
+                let inactive_tasks = disposition_service.inactive_tasks(&id)?;
                 let runs = self.store.list_project_runs(&id)?;
                 Ok(json!({
                     "project": project,
@@ -71,6 +73,7 @@ impl StoreBackend {
                         "workstreams": workstreams.len(),
                         "milestones": milestones.len(),
                         "tasks": tasks.len(),
+                        "inactiveTasks": inactive_tasks.len(),
                         "runs": runs.len(),
                         "blocked": tasks.iter().filter(|item| item.status == TaskStatus::Blocked).count(),
                         "failedRuns": runs.iter().filter(|item| item.status == RunStatus::Failed).count()
@@ -115,15 +118,43 @@ impl StoreBackend {
                     .store
                     .get_workstream(&workstream_id)?
                     .context("workstream not found")?;
-                let tasks = self
-                    .store
-                    .list_tasks(&workstream.project_id)?
-                    .into_iter()
-                    .filter(|task| task.workstream_id.as_ref() == Some(&workstream_id))
-                    .collect::<Vec<_>>();
+                let include_inactive =
+                    optional_bool(arguments, "include_inactive")?.unwrap_or(false);
+                let tasks = if include_inactive {
+                    self.store.list_tasks(&workstream.project_id)?
+                } else {
+                    TaskDispositionService::new(self.store.clone())
+                        .active_tasks(&workstream.project_id)?
+                }
+                .into_iter()
+                .filter(|task| task.workstream_id.as_ref() == Some(&workstream_id))
+                .collect::<Vec<_>>();
                 Ok(serde_json::to_value(tasks)?)
             }
             "task.create" => self.create_task(arguments),
+            "task.archive" => Ok(serde_json::to_value(
+                TaskDispositionService::new(self.store.clone()).archive(
+                    &required_id(arguments, "task_id")?,
+                    required_string(arguments, "reason")?,
+                )?,
+            )?),
+            "task.supersede" => Ok(serde_json::to_value(
+                TaskDispositionService::new(self.store.clone()).supersede(
+                    &required_id(arguments, "task_id")?,
+                    &required_id(arguments, "replacement_task_id")?,
+                    required_string(arguments, "reason")?,
+                )?,
+            )?),
+            "task.restore" => Ok(serde_json::to_value(
+                TaskDispositionService::new(self.store.clone()).restore(
+                    &required_id(arguments, "task_id")?,
+                    required_string(arguments, "reason")?,
+                )?,
+            )?),
+            "task.disposition-history" => Ok(serde_json::to_value(
+                TaskDispositionService::new(self.store.clone())
+                    .history(&required_id(arguments, "task_id")?)?,
+            )?),
             "handoff.create" => self.create_handoff(arguments),
             "handoff.list" => self.list_handoffs(arguments),
             "handoff.get" => Ok(serde_json::to_value(
@@ -827,6 +858,36 @@ mod tests {
         assert_eq!(task["path_scope"], json!(["apps/console/**"]));
         assert_eq!(task["depends_on"], json!([dependency.id]));
         assert_eq!(task["milestone_id"], created["id"]);
+
+        let archived = backend
+            .call_inner(
+                "task.archive",
+                &json!({"task_id": task["id"], "reason": "replaced outside this draft"}),
+            )
+            .await?;
+        assert_eq!(archived["action"], "archived");
+        let active = backend
+            .call_inner("task.list", &json!({"workstream_id": workstream.id}))
+            .await?;
+        assert_eq!(active.as_array().map(Vec::len), Some(1));
+        let all = backend
+            .call_inner(
+                "task.list",
+                &json!({"workstream_id": workstream.id, "include_inactive": true}),
+            )
+            .await?;
+        assert_eq!(all.as_array().map(Vec::len), Some(2));
+        let restored = backend
+            .call_inner(
+                "task.restore",
+                &json!({"task_id": task["id"], "reason": "draft is needed again"}),
+            )
+            .await?;
+        assert_eq!(restored["action"], "restored");
+        let history = backend
+            .call_inner("task.disposition-history", &json!({"task_id": task["id"]}))
+            .await?;
+        assert_eq!(history.as_array().map(Vec::len), Some(2));
         Ok(())
     }
 

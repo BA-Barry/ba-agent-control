@@ -126,6 +126,51 @@ pub struct Task {
     pub updated_at: Timestamp,
 }
 
+/// One immutable user decision that changes whether a Task appears in the active register.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskDisposition {
+    pub id: EntityId,
+    pub task_id: EntityId,
+    pub action: TaskDispositionAction,
+    pub reason: String,
+    #[serde(default)]
+    pub replacement_task_id: Option<EntityId>,
+    #[serde(default)]
+    pub previous_disposition_id: Option<EntityId>,
+    pub created_at: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDispositionAction {
+    Archived,
+    Superseded,
+    Restored,
+}
+
+impl TaskDispositionAction {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Archived => "archived",
+            Self::Superseded => "superseded",
+            Self::Restored => "restored",
+        }
+    }
+
+    #[must_use]
+    pub const fn hides_task(self) -> bool {
+        matches!(self, Self::Archived | Self::Superseded)
+    }
+}
+
+/// An inactive Task paired with the immutable decision that currently hides it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InactiveTask {
+    pub task: Task,
+    pub disposition: TaskDisposition,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentProfile {
     pub id: EntityId,
