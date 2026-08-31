@@ -14,6 +14,7 @@ mod planner;
 mod policy;
 mod profiles;
 mod recovery;
+mod review_repair;
 mod runtime_control;
 mod workflow;
 
@@ -40,6 +41,10 @@ pub use policy::{
 };
 pub use profiles::ensure_builtin_agent_profiles;
 pub use recovery::{RecoveryAction, RecoveryCoordinator, RecoveryRecord};
+pub use review_repair::{
+    ReviewRepairAction, ReviewRepairLoopDecisionRequest, ReviewRepairLoopService,
+    ReviewRepairLoopStartRequest,
+};
 pub use runtime_control::RuntimeCoordinator;
 pub use workflow::{
     WorkflowInstance, WorkflowInstantiationRequest, WorkflowTemplate, WorkflowTemplateCatalog,
@@ -71,6 +76,10 @@ pub enum SchedulerError {
     InvalidWorkflowTemplate(String),
     #[error("workflow template not found: {0}")]
     WorkflowTemplateNotFound(String),
+    #[error("invalid review/repair loop: {0}")]
+    InvalidReviewRepairLoop(String),
+    #[error("review/repair loop not found: {0}")]
+    ReviewRepairLoopNotFound(String),
     #[error("invalid handoff: {0}")]
     InvalidHandoff(String),
     #[error("handoff integrity check failed: {0}")]

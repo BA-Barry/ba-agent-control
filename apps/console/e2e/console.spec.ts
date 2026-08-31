@@ -107,6 +107,7 @@ async function mockLongRunApi(page: Page, withQueue = false) {
   const projectId = '01LONGPROJECT00000000000001'
   const taskId = '01LONGTASK000000000000000001'
   const runId = '01LONGRUN0000000000000000001'
+  const reviewLoopId = '01REVIEWLOOP000000000000001'
   const longName = `控制点-${'非常长的中英文混合项目名 Long project name 🚧 '.repeat(8)}`
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -348,6 +349,64 @@ async function mockLongRunApi(page: Page, withQueue = false) {
       await json(route, { path: 'G:/work/.ba-agent/workflows/feature-delivery.toml' }, 201)
       return
     }
+    if (path === '/api/v1/review-repair-loops' && route.request().method() === 'GET') {
+      await json(route, [{
+        id: reviewLoopId,
+        project_id: projectId,
+        workstream_id: '01REVIEWLOOPWORKSTREAM000001',
+        title: '修复调度恢复边界',
+        objective: '崩溃恢复后任务状态、事件序号与收据保持一致',
+        write_scope: ['crates/ba-scheduler/**'],
+        max_repairs: 2,
+        repairs_started: 0,
+        status: 'awaiting_decision',
+        active_review_task_id: reviewTaskId,
+        confirmation_task_id: null,
+        decisions: [],
+        created_at: now,
+        updated_at: now,
+      }])
+      return
+    }
+    if (path === '/api/v1/review-repair-loops' && route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as Record<string, unknown>
+      await json(route, {
+        id: '01NEWREVIEWLOOP0000000000001',
+        project_id: input.projectId,
+        workstream_id: '01NEWREVIEWWORKSTREAM000001',
+        title: input.title,
+        objective: input.objective,
+        write_scope: input.writeScope,
+        max_repairs: input.maxRepairs,
+        repairs_started: 0,
+        status: 'running',
+        active_review_task_id: '01NEWREVIEWTASK000000000001',
+        confirmation_task_id: null,
+        decisions: [],
+        created_at: now,
+        updated_at: now,
+      }, 201)
+      return
+    }
+    if (path === `/api/v1/review-repair-loops/${reviewLoopId}/decide` && route.request().method() === 'POST') {
+      await json(route, {
+        id: reviewLoopId,
+        project_id: projectId,
+        workstream_id: '01REVIEWLOOPWORKSTREAM000001',
+        title: '修复调度恢复边界',
+        objective: '崩溃恢复后任务状态、事件序号与收据保持一致',
+        write_scope: ['crates/ba-scheduler/**'],
+        max_repairs: 2,
+        repairs_started: 1,
+        status: 'running',
+        active_review_task_id: '01REPAIRREVIEWTASK0000000001',
+        confirmation_task_id: null,
+        decisions: [{ action: 'repair', note: '恢复测试仍缺少锁冲突覆盖', review_task_id: reviewTaskId, decided_at: now }],
+        created_at: now,
+        updated_at: now,
+      })
+      return
+    }
     if (path === '/api/v1/handoffs' && route.request().method() === 'GET') {
       const direction = new URL(route.request().url()).searchParams.get('direction')
       await json(route, direction === 'incoming' ? [{
@@ -540,6 +599,40 @@ test('a workflow template creates an assigned dependency chain without hiding it
     writeScope: ['crates/ba-scheduler/**', 'apps/console/**'],
   })
   await expect(page.getByRole('status').filter({ hasText: '已创建工作流及 3 个带角色任务' })).toBeVisible()
+  await expectNoDocumentOverflow(page)
+  await expectNoA11yViolations(page)
+})
+
+test('a controlled review repair loop preserves its boundary and explicit repair decision', async ({ page }) => {
+  await seedSettings(page, 'zh', 'light')
+  await mockLongRunApi(page)
+  await page.goto('/workflows')
+  await page.getByRole('button', { name: '审查修复闭环', exact: true }).click()
+  await page.getByLabel('闭环名称').fill('验证持久化恢复闭环')
+  await page.getByLabel('目标与验收边界').fill('进程重启后任务状态和事件序号完整恢复')
+  await page.getByLabel('最多修复轮数').selectOption('3')
+  await page.getByLabel('允许写入范围（逗号或换行分隔）').fill('crates/ba-store/**\ncrates/ba-scheduler/**')
+  const createRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/review-repair-loops')
+  await page.getByRole('button', { name: '创建闭环' }).click()
+  expect((await createRequest).postDataJSON()).toEqual({
+    projectId: '01LONGPROJECT00000000000001',
+    title: '验证持久化恢复闭环',
+    objective: '进程重启后任务状态和事件序号完整恢复',
+    writeScope: ['crates/ba-store/**', 'crates/ba-scheduler/**'],
+    maxRepairs: 3,
+  })
+  await expect(page.getByRole('status').filter({ hasText: '受控审查—修复闭环已创建' })).toBeVisible()
+
+  await page.getByLabel('决定依据（必填）').fill('恢复测试仍缺少锁冲突覆盖')
+  const repairRequest = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname === '/api/v1/review-repair-loops/01REVIEWLOOP000000000000001/decide')
+  await page.getByRole('button', { name: '创建修复轮次' }).click()
+  expect((await repairRequest).postDataJSON()).toEqual({
+    decision: 'repair',
+    note: '恢复测试仍缺少锁冲突覆盖',
+  })
+  await expect(page.getByRole('status').filter({ hasText: '闭环决定已记录：running' })).toBeVisible()
   await expectNoDocumentOverflow(page)
   await expectNoA11yViolations(page)
 })

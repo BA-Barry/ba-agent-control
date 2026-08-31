@@ -14,8 +14,8 @@ use std::{
 
 use ba_core::{
     AgentProfile, Approval, Artifact, Dispatch, EntityId, Gate, Milestone, Project, Receipt,
-    ReceiptChainError, ReceiptDraft, Run, RunEvent, RunStatus, Task, TaskStatus, Timestamp,
-    Workstream, Worktree, compute_receipt_hash, now,
+    ReceiptChainError, ReceiptDraft, ReviewRepairLoop, Run, RunEvent, RunStatus, Task, TaskStatus,
+    Timestamp, Workstream, Worktree, compute_receipt_hash, now,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -26,10 +26,11 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use thiserror::Error;
 
-const CURRENT_SCHEMA_VERSION: u32 = 3;
+const CURRENT_SCHEMA_VERSION: u32 = 4;
 const MIGRATION_0001: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_scheduler_settings.sql");
 const MIGRATION_0003: &str = include_str!("../migrations/0003_task_assignments.sql");
+const MIGRATION_0004: &str = include_str!("../migrations/0004_review_repair_loops.sql");
 
 /// Thread-safe handle to the process-wide SQLite database.
 #[derive(Clone, Debug)]
@@ -192,6 +193,131 @@ impl SqliteStore {
 
     pub fn delete_workstream(&self, id: &EntityId) -> Result<bool, StoreError> {
         delete_by_id(&self.connection.lock(), "workstreams", id)
+    }
+
+    pub fn upsert_review_repair_loop(&self, item: &ReviewRepairLoop) -> Result<(), StoreError> {
+        let data = json(item)?;
+        self.connection.lock().execute(
+            "INSERT INTO review_repair_loops(id,project_id,workstream_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6) \
+             ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,workstream_id=excluded.workstream_id,status=excluded.status,updated_at=excluded.updated_at,data=excluded.data",
+            params![item.id.as_str(), item.project_id.as_str(), item.workstream_id.as_str(), item.status.as_str(), timestamp(item.updated_at), data],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_review_repair_loop(
+        &self,
+        id: &EntityId,
+    ) -> Result<Option<ReviewRepairLoop>, StoreError> {
+        get_json(
+            &self.connection.lock(),
+            "SELECT data FROM review_repair_loops WHERE id=?1",
+            params![id.as_str()],
+        )
+    }
+
+    pub fn list_review_repair_loops(
+        &self,
+        project_id: &EntityId,
+    ) -> Result<Vec<ReviewRepairLoop>, StoreError> {
+        list_json(
+            &self.connection.lock(),
+            "SELECT data FROM review_repair_loops WHERE project_id=?1 ORDER BY updated_at DESC",
+            params![project_id.as_str()],
+        )
+    }
+
+    /// Create a bounded review/repair loop and its initial task graph atomically.
+    pub fn create_review_repair_loop(
+        &self,
+        loop_record: &ReviewRepairLoop,
+        workstream: &Workstream,
+        tasks: &[Task],
+    ) -> Result<(), StoreError> {
+        if loop_record.project_id != workstream.project_id
+            || loop_record.workstream_id != workstream.id
+            || tasks.is_empty()
+            || tasks.iter().any(|task| {
+                task.project_id != workstream.project_id
+                    || task.workstream_id.as_ref() != Some(&workstream.id)
+            })
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "review/repair loop, workstream, and tasks must share one project",
+            ));
+        }
+        let task_ids = tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        if !task_ids.contains(&loop_record.active_review_task_id)
+            || tasks
+                .iter()
+                .flat_map(|task| &task.depends_on)
+                .any(|dependency| !task_ids.contains(dependency))
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "review/repair loop tasks must form a self-contained graph",
+            ));
+        }
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO workstreams(id,project_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                workstream.id.as_str(),
+                workstream.project_id.as_str(),
+                workstream.status,
+                timestamp(workstream.updated_at),
+                json(workstream)?
+            ],
+        )?;
+        for task in tasks {
+            transaction.execute(
+                "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![task.id.as_str(),task.project_id.as_str(),optional_id(task.workstream_id.as_ref()),optional_id(task.milestone_id.as_ref()),optional_id(task.agent_profile_id.as_ref()),task.status.as_str(),timestamp(task.updated_at),json(task)?],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO review_repair_loops(id,project_id,workstream_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![loop_record.id.as_str(),loop_record.project_id.as_str(),loop_record.workstream_id.as_str(),loop_record.status.as_str(),timestamp(loop_record.updated_at),json(loop_record)?],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Add one generated loop stage and update the loop record atomically.
+    pub fn advance_review_repair_loop(
+        &self,
+        loop_record: &ReviewRepairLoop,
+        tasks: &[Task],
+    ) -> Result<(), StoreError> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        for task in tasks {
+            if task.project_id != loop_record.project_id
+                || task.workstream_id.as_ref() != Some(&loop_record.workstream_id)
+            {
+                return Err(StoreError::InvalidEntityLink(
+                    "generated loop task must belong to the loop workstream",
+                ));
+            }
+            transaction.execute(
+                "INSERT INTO tasks(id,project_id,workstream_id,milestone_id,agent_profile_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![task.id.as_str(),task.project_id.as_str(),optional_id(task.workstream_id.as_ref()),optional_id(task.milestone_id.as_ref()),optional_id(task.agent_profile_id.as_ref()),task.status.as_str(),timestamp(task.updated_at),json(task)?],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE review_repair_loops SET status=?1,updated_at=?2,data=?3 WHERE id=?4",
+            params![
+                loop_record.status.as_str(),
+                timestamp(loop_record.updated_at),
+                json(loop_record)?,
+                loop_record.id.as_str()
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn upsert_milestone(&self, item: &Milestone) -> Result<(), StoreError> {
@@ -1361,6 +1487,12 @@ fn migrate(connection: &mut Connection, from: u32) -> Result<(), StoreError> {
         let transaction = connection.transaction()?;
         transaction.execute_batch(MIGRATION_0003)?;
         transaction.pragma_update(None, "user_version", 3)?;
+        transaction.commit()?;
+    }
+    if from < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_0004)?;
+        transaction.pragma_update(None, "user_version", 4)?;
         transaction.commit()?;
     }
     Ok(())

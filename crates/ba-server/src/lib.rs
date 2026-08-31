@@ -33,9 +33,10 @@ use ba_runtime::{ApprovalDecision as RuntimeApprovalDecision, CodexAdapter, Runt
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
     HandoffDraft, HandoffService, ProjectOnboardingMode, ProjectOnboardingRequest,
-    ProjectOnboardingService, RecoveryAction, RecoveryCoordinator, RuntimeCoordinator,
-    SchedulerError, SchedulerPolicyService, WorkflowInstantiationRequest, WorkflowTemplateService,
-    configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
+    ProjectOnboardingService, RecoveryAction, RecoveryCoordinator, ReviewRepairAction,
+    ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
+    RuntimeCoordinator, SchedulerError, SchedulerPolicyService, WorkflowInstantiationRequest,
+    WorkflowTemplateService, configured_gate, configured_gate_names, ensure_builtin_agent_profiles,
 };
 use ba_store::{SqliteStore, StoreError};
 use futures_util::Stream;
@@ -461,6 +462,15 @@ pub fn router(state: AppState) -> Router {
             post(materialize_workflow_template),
         )
         .route("/workflow-instances", post(create_workflow_instance))
+        .route(
+            "/review-repair-loops",
+            get(list_review_repair_loops).post(create_review_repair_loop),
+        )
+        .route("/review-repair-loops/{id}", get(get_review_repair_loop))
+        .route(
+            "/review-repair-loops/{id}/decide",
+            post(decide_review_repair_loop),
+        )
         .route("/milestones", get(list_milestones).post(create_milestone))
         .route("/tasks", get(list_tasks).post(create_task))
         .route("/tasks/{id}/transition", post(transition_task))
@@ -903,6 +913,99 @@ async fn create_workflow_instance(
 fn workflow_error(error: SchedulerError) -> ApiError {
     match error {
         SchedulerError::WorkflowTemplateNotFound(_) => ApiError::not_found(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_request(error.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateReviewRepairLoop {
+    project_id: String,
+    title: String,
+    objective: String,
+    write_scope: Vec<String>,
+    #[serde(default = "default_max_repairs")]
+    max_repairs: u8,
+}
+
+const fn default_max_repairs() -> u8 {
+    2
+}
+
+async fn create_review_repair_loop(
+    State(state): State<AppState>,
+    Json(input): Json<CreateReviewRepairLoop>,
+) -> Result<(StatusCode, Json<ba_core::ReviewRepairLoop>), ApiError> {
+    let result = ReviewRepairLoopService::new(state.store)
+        .start(&ReviewRepairLoopStartRequest {
+            project_id: parse_id(&input.project_id)?,
+            title: input.title,
+            objective: input.objective,
+            write_scope: input.write_scope,
+            max_repairs: input.max_repairs,
+        })
+        .map_err(review_repair_error)?;
+    Ok((StatusCode::CREATED, Json(result)))
+}
+
+async fn list_review_repair_loops(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<ba_core::ReviewRepairLoop>>, ApiError> {
+    ReviewRepairLoopService::new(state.store)
+        .list(&parse_id(&query.project_id)?)
+        .map(Json)
+        .map_err(review_repair_error)
+}
+
+async fn get_review_repair_loop(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ba_core::ReviewRepairLoop>, ApiError> {
+    ReviewRepairLoopService::new(state.store)
+        .get(&parse_id(&id)?)
+        .map(Json)
+        .map_err(review_repair_error)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecideReviewRepairLoop {
+    decision: String,
+    note: String,
+}
+
+async fn decide_review_repair_loop(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<DecideReviewRepairLoop>,
+) -> Result<Json<ba_core::ReviewRepairLoop>, ApiError> {
+    let action = match input.decision.as_str() {
+        "accept" => ReviewRepairAction::Accept,
+        "repair" => ReviewRepairAction::Repair,
+        "block" => ReviewRepairAction::Block,
+        _ => {
+            return Err(ApiError::bad_request(
+                "decision must be accept, repair, or block",
+            ));
+        }
+    };
+    ReviewRepairLoopService::new(state.store)
+        .decide(
+            &parse_id(&id)?,
+            &ReviewRepairLoopDecisionRequest {
+                action,
+                note: input.note,
+            },
+        )
+        .map(Json)
+        .map_err(review_repair_error)
+}
+
+fn review_repair_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::ReviewRepairLoopNotFound(_) => ApiError::not_found(error.to_string()),
         SchedulerError::Store(_) => ApiError::internal(error),
         _ => ApiError::bad_request(error.to_string()),
     }
@@ -2672,6 +2775,7 @@ mod tests {
         .await?;
         assert_eq!(handoff_status, StatusCode::CREATED);
         assert!(repository.path().join(&created.artifact.path).is_file());
+
         let Json(incoming) = list_handoffs(
             State(state),
             Query(HandoffQuery {
@@ -2682,6 +2786,69 @@ mod tests {
         .await?;
         assert_eq!(incoming.len(), 1);
         assert_eq!(incoming[0].handoff.id, created.handoff.id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_repair_endpoints_preserve_explicit_decisions() -> anyhow::Result<()> {
+        let state = state()?;
+        let repository = tempdir()?;
+        let stamp = now();
+        let project = Project {
+            id: EntityId::new(),
+            name: "Review loop API".into(),
+            root_path: repository.path().to_string_lossy().into_owned(),
+            description: String::new(),
+            language: "en".into(),
+            created_at: stamp,
+            updated_at: stamp,
+        };
+        state.store.upsert_project(&project)?;
+        ensure_builtin_agent_profiles(&state.store)?;
+
+        let (status, Json(loop_record)) = create_review_repair_loop(
+            State(state.clone()),
+            Json(CreateReviewRepairLoop {
+                project_id: project.id.to_string(),
+                title: "Bounded API repair".into(),
+                objective: "prove explicit review decisions".into(),
+                write_scope: vec!["crates/auth".into()],
+                max_repairs: 2,
+            }),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::CREATED);
+        for status in [
+            TaskStatus::Queued,
+            TaskStatus::Running,
+            TaskStatus::Review,
+            TaskStatus::Completed,
+        ] {
+            state
+                .store
+                .transition_task(&loop_record.active_review_task_id, status)?;
+        }
+        let Json(awaiting) =
+            get_review_repair_loop(State(state.clone()), Path(loop_record.id.to_string())).await?;
+        assert_eq!(awaiting.status.as_str(), "awaiting_decision");
+        let Json(confirming) = decide_review_repair_loop(
+            State(state.clone()),
+            Path(loop_record.id.to_string()),
+            Json(DecideReviewRepairLoop {
+                decision: "accept".into(),
+                note: "review evidence accepted".into(),
+            }),
+        )
+        .await?;
+        assert_eq!(confirming.status.as_str(), "confirming");
+        let Json(loops) = list_review_repair_loops(
+            State(state),
+            Query(ProjectQuery {
+                project_id: project.id.to_string(),
+            }),
+        )
+        .await?;
+        assert_eq!(loops.len(), 1);
         Ok(())
     }
 

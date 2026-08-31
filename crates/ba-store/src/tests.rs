@@ -144,7 +144,7 @@ fn open_temp() -> Result<(TempDir, SqliteStore), Box<dyn std::error::Error>> {
 #[test]
 fn migrates_and_round_trips_entities() -> Result<(), Box<dyn std::error::Error>> {
     let (_temp, store) = open_temp()?;
-    assert_eq!(store.schema_version()?, 3);
+    assert_eq!(store.schema_version()?, 4);
     let project = project();
     let task = task(project.id.clone());
     store.upsert_project(&project)?;

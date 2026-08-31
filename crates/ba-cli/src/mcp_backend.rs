@@ -9,8 +9,10 @@ use ba_runtime::{ApprovalDecision, CodexAdapter};
 use ba_scheduler::{
     ApprovalResolution, DispatchCoordinator, FinalizationCoordinator, GateCoordinator,
     HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
-    ProjectOnboardingRequest, ProjectOnboardingService, RuntimeCoordinator, SchedulerPolicyService,
-    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
+    ProjectOnboardingRequest, ProjectOnboardingService, ReviewRepairAction,
+    ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
+    RuntimeCoordinator, SchedulerPolicyService, WorkflowInstantiationRequest,
+    WorkflowTemplateService, configured_gate,
 };
 use ba_store::SqliteStore;
 use serde_json::{Value, json};
@@ -92,6 +94,16 @@ impl StoreBackend {
                 )?
             })),
             "workflow.instantiate" => self.instantiate_workflow(arguments),
+            "review-loop.start" => self.start_review_loop(arguments),
+            "review-loop.list" => Ok(serde_json::to_value(
+                ReviewRepairLoopService::new(self.store.clone())
+                    .list(&required_id(arguments, "project_id")?)?,
+            )?),
+            "review-loop.get" => Ok(serde_json::to_value(
+                ReviewRepairLoopService::new(self.store.clone())
+                    .get(&required_id(arguments, "loop_id")?)?,
+            )?),
+            "review-loop.decide" => self.decide_review_loop(arguments),
             "milestone.list" => Ok(serde_json::to_value(
                 self.store
                     .list_milestones(&required_id(arguments, "project_id")?)?,
@@ -269,6 +281,42 @@ impl StoreBackend {
                 workstream_name: optional_string(arguments, "workstream_name"),
                 milestone_id: optional_id(arguments, "milestone_id")?,
                 write_scope: optional_string_array(arguments, "write_scope")?,
+            },
+        )?;
+        Ok(serde_json::to_value(result)?)
+    }
+
+    fn start_review_loop(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let max_repairs = arguments
+            .get("max_repairs")
+            .map(|_| required_usize(arguments, "max_repairs"))
+            .transpose()?
+            .unwrap_or(2);
+        let max_repairs = u8::try_from(max_repairs).context("max_repairs is too large")?;
+        let result = ReviewRepairLoopService::new(self.store.clone()).start(
+            &ReviewRepairLoopStartRequest {
+                project_id: required_id(arguments, "project_id")?,
+                title: required_string(arguments, "title")?.into(),
+                objective: required_string(arguments, "objective")?.into(),
+                write_scope: optional_string_array(arguments, "write_scope")?,
+                max_repairs,
+            },
+        )?;
+        Ok(serde_json::to_value(result)?)
+    }
+
+    fn decide_review_loop(&self, arguments: &Value) -> anyhow::Result<Value> {
+        let action = match required_string(arguments, "decision")? {
+            "accept" => ReviewRepairAction::Accept,
+            "repair" => ReviewRepairAction::Repair,
+            "block" => ReviewRepairAction::Block,
+            _ => anyhow::bail!("decision must be accept, repair, or block"),
+        };
+        let result = ReviewRepairLoopService::new(self.store.clone()).decide(
+            &required_id(arguments, "loop_id")?,
+            &ReviewRepairLoopDecisionRequest {
+                action,
+                note: required_string(arguments, "note")?.into(),
             },
         )?;
         Ok(serde_json::to_value(result)?)
@@ -822,6 +870,46 @@ mod tests {
         let tasks = instance["tasks"].as_array().context("tasks missing")?;
         assert_eq!(tasks.len(), 6);
         assert!(tasks.iter().all(|task| !task["agent_profile_id"].is_null()));
+
+        let loop_record = backend
+            .call_inner(
+                "review-loop.start",
+                &json!({
+                    "project_id": project.id,
+                    "title": "MCP repair loop",
+                    "objective": "validate bounded repair decisions",
+                    "write_scope": ["crates/ba-scheduler/**"],
+                    "max_repairs": 1
+                }),
+            )
+            .await?;
+        let review_id = loop_record["active_review_task_id"]
+            .as_str()
+            .context("active review task missing")?;
+        for status in ["queued", "running", "review", "completed"] {
+            backend
+                .call_inner(
+                    "task.transition",
+                    &json!({"task_id": review_id, "status": status}),
+                )
+                .await?;
+        }
+        let refreshed = backend
+            .call_inner("review-loop.get", &json!({"loop_id": loop_record["id"]}))
+            .await?;
+        assert_eq!(refreshed["status"], "awaiting_decision");
+        let repairing = backend
+            .call_inner(
+                "review-loop.decide",
+                &json!({
+                    "loop_id": loop_record["id"],
+                    "decision": "repair",
+                    "note": "one finding remains"
+                }),
+            )
+            .await?;
+        assert_eq!(repairing["status"], "running");
+        assert_eq!(repairing["repairs_started"], 1);
 
         let handoff = backend
             .call_inner(

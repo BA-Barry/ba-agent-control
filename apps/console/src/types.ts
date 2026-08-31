@@ -79,6 +79,36 @@ export interface WorkflowTemplateCatalog {
   diagnostics: Array<{ path: string; error: string }>
 }
 
+export type ReviewRepairLoopStatus =
+  | 'running'
+  | 'awaiting_decision'
+  | 'confirming'
+  | 'completed'
+  | 'blocked'
+  | 'exhausted'
+
+export interface ReviewRepairLoopSummary {
+  id: string
+  project_id: string
+  workstream_id: string
+  title: string
+  objective: string
+  write_scope: string[]
+  max_repairs: number
+  repairs_started: number
+  status: ReviewRepairLoopStatus
+  active_review_task_id: string
+  confirmation_task_id: string | null
+  decisions: Array<{
+    decision: 'accept' | 'repair' | 'block'
+    review_task_id: string
+    note: string
+    decided_at: string
+  }>
+  created_at: string
+  updated_at: string
+}
+
 export interface HandoffSummary {
   handoff: {
     id: string

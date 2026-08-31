@@ -41,6 +41,7 @@ ba-agent-control project create "G:\全新项目" --name "新项目"
 
 1. 在“项目”导入现有 Git 仓库或创建全新的本地仓库，并确认注册成功。
 2. 在“工作流与任务”优先选择“从模板创建”。功能交付、缺陷调查、安全审查、迁移、发布准备和文档核验模板会一次性创建完整依赖链；仍可用“新建任务”登记单个例外任务。
+   如果工作需要根据独立审查结果反复修复，改用“审查修复闭环”：填写明确目标、仓库相对写入范围和最多 1–3 轮修复。系统先创建实现、测试、审查三个任务，审查完成后才显示人工决定。
 3. 为工作流填写仓库相对写入范围，例如 `apps/console/**`。模板会把角色、验收条件和直接依赖持久写入每个任务；只读步骤不会获得写权限。
 4. 将首个可执行任务从 `draft` 调整到 `ready` 后派发。派发面板默认沿用任务已分配角色，允许人工调整为权限兼容的其他角色。
 5. 在同一页面观察“等待启动”队列。四个槽位占满后，第五个任务会持久排队；可以上移、下移或取消。依赖未完成或写范围冲突的任务会等待，不会抢占执行。
@@ -83,6 +84,33 @@ ba-agent-control task handoff-list <SOURCE_TASK_ID> --outgoing
 ```
 
 控制台任务行的“交接”会同时显示收到和发出的记录，并在读取时核对规范 JSON、Artifact 元数据和 SHA-256 摘要。摘要用于发现尚未提交到 Git 的交接文件被替换；它不是额外的质量门。
+
+## 受控审查—修复闭环
+
+闭环适合“首次实现不应直接视为完成”的高风险或跨模块改动。它不是自动无限重试：每次 Reviewer 任务完成后，状态会变为 `awaiting_decision`，必须由你写明依据并选择：
+
+- `accept`：接受当前审查结论，但仍创建一个独立确认任务；确认任务完成后闭环才是 `completed`；
+- `repair`：创建新的 Implementer → Test Engineer → Reviewer 三任务阶段；达到修复轮数上限时状态变为 `exhausted`，不会继续生成任务；
+- `block`：保留当前发现并停止，等待单独处理。
+
+任何阶段任务失败、取消或阻塞都会让闭环进入 `blocked`。每个阶段都是独立 Task/Run，可继续保留质量门、交接、事件和收据；人工决定及说明也会持久保存。控制台每五秒从持久任务状态同步一次。
+
+```powershell
+# 创建最多两轮修复的闭环；目标和至少一个写入范围必填
+ba-agent-control workstream loop-start <PROJECT_ID> "登录恢复闭环" `
+  --objective "重启后会话、事件序号和收据保持一致" `
+  --scope "crates/auth/**" `
+  --scope "apps/console/**" `
+  --max-repairs 2
+
+ba-agent-control workstream loop-list <PROJECT_ID>
+ba-agent-control workstream loop-show <LOOP_ID>
+
+# Reviewer 完成后选择其一；--note 是永久决定依据，不能为空
+ba-agent-control workstream loop-decide <LOOP_ID> repair --note "仍缺少锁冲突回归覆盖"
+ba-agent-control workstream loop-decide <LOOP_ID> accept --note "发现均已关闭，进入独立确认"
+ba-agent-control workstream loop-decide <LOOP_ID> block --note "依赖上游接口决策"
+```
 
 ## 并发与队列
 

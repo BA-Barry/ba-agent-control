@@ -355,6 +355,53 @@ pub fn default_tools() -> Vec<ToolDefinition> {
             false,
         ),
         definition(
+            "review-loop.start",
+            "Create a durable bounded implement, test, review, repair, and confirmation loop. Repairs are generated only after an explicit local-user decision.",
+            BTreeMap::from([
+                ("project_id", field("Project ULID")),
+                ("title", field("Loop title")),
+                ("objective", field("Acceptance-oriented objective")),
+                (
+                    "write_scope",
+                    json!({"type":"array","items":{"type":"string"},"minItems":1,"description":"Repository-relative write scope"}),
+                ),
+                (
+                    "max_repairs",
+                    json!({"type":"integer","minimum":1,"maximum":3,"default":2}),
+                ),
+            ]),
+            &["project_id", "title", "objective", "write_scope"],
+            false,
+        ),
+        definition(
+            "review-loop.list",
+            "List and refresh bounded review/repair loops for a project.",
+            BTreeMap::from([("project_id", field("Project ULID"))]),
+            &["project_id"],
+            true,
+        ),
+        definition(
+            "review-loop.get",
+            "Read and refresh one bounded review/repair loop.",
+            BTreeMap::from([("loop_id", field("Review/repair loop ULID"))]),
+            &["loop_id"],
+            true,
+        ),
+        definition(
+            "review-loop.decide",
+            "Persist an explicit local-user decision after a completed review: accept and create confirmation, generate the next bounded repair, or block.",
+            BTreeMap::from([
+                ("loop_id", field("Review/repair loop ULID")),
+                (
+                    "decision",
+                    json!({"type":"string","enum":["accept","repair","block"]}),
+                ),
+                ("note", field("Decision evidence or rationale")),
+            ]),
+            &["loop_id", "decision", "note"],
+            false,
+        ),
+        definition(
             "milestone.list",
             "List durable milestones for a project.",
             BTreeMap::from([("project_id", field("Project ULID"))]),
@@ -713,6 +760,8 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "project.import"));
         assert!(tools.iter().any(|tool| tool.name == "project.create"));
         assert!(tools.iter().any(|tool| tool.name == "workflow.instantiate"));
+        assert!(tools.iter().any(|tool| tool.name == "review-loop.start"));
+        assert!(tools.iter().any(|tool| tool.name == "review-loop.decide"));
         assert!(tools.iter().any(|tool| tool.name == "handoff.create"));
         assert!(tools.iter().any(|tool| tool.name == "handoff.list"));
     }

@@ -14,6 +14,7 @@ import type {
   TaskStatus,
   TaskSummary,
   WorkflowTemplateCatalog,
+  ReviewRepairLoopSummary,
   HandoffSummary,
 } from '../types'
 
@@ -705,6 +706,29 @@ export function instantiateWorkflow(input: {
 
 export function materializeWorkflowTemplate(projectId: string, templateId: string, csrfToken: string) {
   return mutate<{ path: string }>('/api/v1/workflow-templates/materialize', csrfToken, { projectId, templateId })
+}
+
+export function loadReviewRepairLoops(projectId: string) {
+  return apiFetch<ReviewRepairLoopSummary[]>(query('/api/v1/review-repair-loops', 'project_id', projectId))
+}
+
+export function createReviewRepairLoop(input: {
+  projectId: string
+  title: string
+  objective: string
+  writeScope: string[]
+  maxRepairs: number
+}, csrfToken: string) {
+  return mutate<ReviewRepairLoopSummary>('/api/v1/review-repair-loops', csrfToken, input)
+}
+
+export function decideReviewRepairLoop(
+  loopId: string,
+  decision: 'accept' | 'repair' | 'block',
+  note: string,
+  csrfToken: string,
+) {
+  return mutate<ReviewRepairLoopSummary>(`/api/v1/review-repair-loops/${encodeURIComponent(loopId)}/decide`, csrfToken, { decision, note })
 }
 
 export function loadHandoffs(taskId: string, direction: 'incoming' | 'outgoing' = 'incoming') {

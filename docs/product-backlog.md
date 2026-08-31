@@ -64,7 +64,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 6. Add a controlled review-and-repair loop
 
-**Current gap:** an Implementer, Reviewer, and Test Engineer can run separately, but BA Agent does not yet turn findings into a bounded repair task and re-review cycle.
+**Progress (2026-08-31): complete locally.** A SQLite-backed loop now creates assigned Implementer → Test Engineer → Reviewer tasks atomically, refreshes its state from durable Task records, and waits for a recorded local-user decision after every review. Accept creates a separate confirmation task; repair creates a fresh three-task stage up to the configured one-to-three-round limit; block, failed work, and an exhausted limit stop the loop without rewriting evidence. CLI, REST, MCP, and the bilingual console share the service, and desktop/mobile Playwright coverage exercises creation and an explicit repair decision.
 
 **Target outcome:** let the user approve a finite loop such as implement → test → review → repair → confirm. Every iteration must remain a distinct Run with preserved evidence; the loop must stop on success, iteration limit, blocked decision, or failed gate.
 

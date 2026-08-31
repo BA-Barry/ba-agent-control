@@ -13,8 +13,10 @@ use ba_github::GitHubAdapter;
 use ba_runtime::{CodexAdapter, RuntimeAdapter};
 use ba_scheduler::{
     GateDefinition, HandoffCommandEvidence, HandoffDraft, HandoffService, ProjectOnboardingMode,
-    ProjectOnboardingRequest, ProjectOnboardingService, WorkflowInstantiationRequest,
-    WorkflowTemplateService, configured_gate, ensure_builtin_agent_profiles,
+    ProjectOnboardingRequest, ProjectOnboardingService, ReviewRepairAction,
+    ReviewRepairLoopDecisionRequest, ReviewRepairLoopService, ReviewRepairLoopStartRequest,
+    WorkflowInstantiationRequest, WorkflowTemplateService, configured_gate,
+    ensure_builtin_agent_profiles,
 };
 use ba_store::SqliteStore;
 use directories::ProjectDirs;
@@ -260,6 +262,45 @@ pub fn workstream(paths: &DataPaths, command: WorkstreamCommand, json: bool) -> 
             })?,
             json,
         ),
+        WorkstreamCommand::LoopStart {
+            project_id,
+            title,
+            objective,
+            write_scope,
+            max_repairs,
+        } => emit(
+            &ReviewRepairLoopService::new(store).start(&ReviewRepairLoopStartRequest {
+                project_id: id_of(&project_id)?,
+                title,
+                objective,
+                write_scope,
+                max_repairs,
+            })?,
+            json,
+        ),
+        WorkstreamCommand::LoopList { project_id } => emit(
+            &ReviewRepairLoopService::new(store).list(&id_of(&project_id)?)?,
+            json,
+        ),
+        WorkstreamCommand::LoopShow { id } => emit(
+            &ReviewRepairLoopService::new(store).get(&id_of(&id)?)?,
+            json,
+        ),
+        WorkstreamCommand::LoopDecide { id, decision, note } => {
+            let action = match decision.as_str() {
+                "accept" => ReviewRepairAction::Accept,
+                "repair" => ReviewRepairAction::Repair,
+                "block" => ReviewRepairAction::Block,
+                _ => bail!("decision must be accept, repair, or block"),
+            };
+            emit(
+                &ReviewRepairLoopService::new(store).decide(
+                    &id_of(&id)?,
+                    &ReviewRepairLoopDecisionRequest { action, note },
+                )?,
+                json,
+            )
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { cancelDispatch, createMilestone, createProject, createTask, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
+import { cancelDispatch, createMilestone, createProject, createReviewRepairLoop, createTask, decideReviewRepairLoop, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadReviewRepairLoops, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -269,4 +269,36 @@ test('loads templates and handoffs and sends protected workflow mutations', asyn
   })
   expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ projectId: '01PROJECT', templateId: 'feature-delivery' })
   expect(fetchMock.mock.calls[3][0]).toContain('/api/v1/handoffs?task_id=01TASK&direction=incoming')
+})
+
+test('creates, lists, and decides bounded review repair loops', async () => {
+  const loop = {
+    id: '01LOOP', project_id: '01PROJECT', workstream_id: '01WORKSTREAM', title: 'Repair loop',
+    objective: 'Prove the behavior', write_scope: ['crates/**'], max_repairs: 2, repairs_started: 0,
+    status: 'awaiting_decision', active_review_task_id: '01REVIEW', confirmation_task_id: null,
+    decisions: [], created_at: '2026-08-31T00:00:00Z', updated_at: '2026-08-31T00:00:00Z',
+  }
+  const fetchMock = vi.fn()
+    .mockImplementationOnce(() => json(loop, 201))
+    .mockImplementationOnce(() => json([loop]))
+    .mockImplementationOnce(() => json({ ...loop, status: 'running', repairs_started: 1 }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await createReviewRepairLoop({
+    projectId: '01PROJECT', title: 'Repair loop', objective: 'Prove the behavior',
+    writeScope: ['crates/**'], maxRepairs: 2,
+  }, 'csrf-token')
+  await expect(loadReviewRepairLoops('01PROJECT')).resolves.toEqual([loop])
+  await decideReviewRepairLoop('01LOOP', 'repair', 'P1 remains reproducible', 'csrf-token')
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/review-repair-loops')
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+    projectId: '01PROJECT', title: 'Repair loop', objective: 'Prove the behavior',
+    writeScope: ['crates/**'], maxRepairs: 2,
+  })
+  expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/review-repair-loops?project_id=01PROJECT')
+  expect(fetchMock.mock.calls[2][0]).toBe('/api/v1/review-repair-loops/01LOOP/decide')
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({
+    decision: 'repair', note: 'P1 remains reproducible',
+  })
 })

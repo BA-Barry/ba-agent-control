@@ -31,6 +31,63 @@ pub struct Workstream {
     pub updated_at: Timestamp,
 }
 
+/// A user-controlled, bounded implementation/review/repair workflow.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReviewRepairLoop {
+    pub id: EntityId,
+    pub project_id: EntityId,
+    pub workstream_id: EntityId,
+    pub title: String,
+    #[serde(default)]
+    pub objective: String,
+    pub write_scope: Vec<String>,
+    pub max_repairs: u8,
+    #[serde(default)]
+    pub repairs_started: u8,
+    pub status: ReviewRepairLoopStatus,
+    pub active_review_task_id: EntityId,
+    #[serde(default)]
+    pub confirmation_task_id: Option<EntityId>,
+    #[serde(default)]
+    pub decisions: Vec<ReviewRepairDecision>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewRepairLoopStatus {
+    Running,
+    AwaitingDecision,
+    Confirming,
+    Completed,
+    Blocked,
+    Exhausted,
+}
+
+impl ReviewRepairLoopStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::AwaitingDecision => "awaiting_decision",
+            Self::Confirming => "confirming",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+            Self::Exhausted => "exhausted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReviewRepairDecision {
+    pub decision: String,
+    pub review_task_id: EntityId,
+    #[serde(default)]
+    pub note: String,
+    pub decided_at: Timestamp,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Milestone {
     pub id: EntityId,

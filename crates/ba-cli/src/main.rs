@@ -141,6 +141,29 @@ enum WorkstreamCommand {
         #[arg(long = "scope")]
         write_scope: Vec<String>,
     },
+    /// Start a bounded implement, test, review, repair, and confirmation loop.
+    LoopStart {
+        project_id: String,
+        title: String,
+        #[arg(long)]
+        objective: String,
+        #[arg(long = "scope", required = true)]
+        write_scope: Vec<String>,
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=3))]
+        max_repairs: u8,
+    },
+    /// List a project's bounded review/repair loops.
+    LoopList { project_id: String },
+    /// Show one loop and refresh its status from durable tasks.
+    LoopShow { id: String },
+    /// Accept a review, request the next repair, or block the loop.
+    LoopDecide {
+        id: String,
+        #[arg(value_parser = ["accept", "repair", "block"])]
+        decision: String,
+        #[arg(long)]
+        note: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -543,6 +566,42 @@ mod tests {
             Command::Workstream(WorkstreamArgs {
                 command: WorkstreamCommand::Instantiate { template_id, write_scope, .. }
             }) if template_id == "feature-delivery" && write_scope == ["crates/auth"]
+        ));
+
+        let loop_start = Cli::try_parse_from([
+            "ba-agent-control",
+            "workstream",
+            "loop-start",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "Authentication repair",
+            "--objective",
+            "Authentication state survives recovery",
+            "--scope",
+            "crates/auth",
+            "--max-repairs",
+            "3",
+        ])?;
+        assert!(matches!(
+            loop_start.command,
+            Command::Workstream(WorkstreamArgs {
+                command: WorkstreamCommand::LoopStart { max_repairs: 3, write_scope, .. }
+            }) if write_scope == ["crates/auth"]
+        ));
+
+        let loop_decide = Cli::try_parse_from([
+            "ba-agent-control",
+            "workstream",
+            "loop-decide",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "repair",
+            "--note",
+            "P1 remains",
+        ])?;
+        assert!(matches!(
+            loop_decide.command,
+            Command::Workstream(WorkstreamArgs {
+                command: WorkstreamCommand::LoopDecide { decision, note, .. }
+            }) if decision == "repair" && note == "P1 remains"
         ));
 
         let handoff = Cli::try_parse_from([
