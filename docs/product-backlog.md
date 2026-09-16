@@ -10,9 +10,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 1. Make roles usable from the console
 
-**Progress (2026-08-29):** partially complete. Dispatch now recommends one of the eight built-in profiles, lets the user make the final choice, filters write tasks to write-capable profiles, and exposes profiles through `adapter profiles`. Persisting an assignment before dispatch, displaying it consistently, and adding the selector to task creation remain open.
-
-**Current gap:** the role is chosen at dispatch time rather than persisted as part of task planning, so task creation and pre-run views cannot show a durable assignment.
+**Progress (2026-08-30): complete.** Task creation and workflow templates persist an Agent profile assignment, the console shows it before launch, and dispatch reuses it by default while allowing a compatible human override. Write tasks offer only write-capable profiles, all eight built-in profiles are available through `adapter profiles`, and assignments survive restart through SQLite.
 
 **Target outcome:**
 
@@ -72,7 +70,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 **Progress (2026-08-31):** runtime approvals now resolve independently from protected Git approvals. Rejecting or cancelling one App Server command or MCP tool call returns the Run to `running` when no other approval remains, so the Agent can report a safe alternative and the runtime decides the eventual terminal state. Rejected push, deploy, and other protected Git operations still terminate the Run and cancel their sibling approvals.
 
-**Current gap:** the first self-hosted Reviewer run required repeated Windows read-only command approvals, and one rejected tool call terminated the whole run instead of allowing a safe alternative. Durable task `01M0SKWJKQHM8MVWC7H3PAP1YZ` already represents this defect.
+**Current gap:** rejection recovery is complete, but the console still exposes only one-turn approval even though the App Server, REST, and MCP paths support session-scoped approval. Repeated equivalent Windows read-only requests therefore remain noisier than necessary. Durable task `01M0SKWJKQHM8MVWC7H3PAP1YZ` represents the remaining approval-noise work.
 
 **Target outcome:** group narrowly equivalent read-only approvals where the runtime supports it, preserve per-command evidence, and allow the Agent to continue after a declined tool call unless the declined operation is essential.
 
@@ -80,7 +78,7 @@ This backlog records product gaps observed during the personal Alpha acceptance 
 
 ### 8. Reconcile obsolete durable tasks without rewriting history
 
-**Progress (2026-08-31): complete locally.** Archive, supersede, and restore are now separate append-only task disposition records rather than lifecycle states. The active console, REST, CLI, and MCP lists hide archived or superseded tasks by default while scheduler dependency checks retain the complete graph. Every decision requires a reason; supersede also requires a same-project replacement. Queued, running, review, actively dispatched, and still-required upstream tasks are rejected. Restore makes the original Task visible again without changing its status, Runs, events, gates, receipts, or dependencies. SQLite immediate transactions prevent concurrent disposition heads, and desktop/mobile browser tests exercise supersede, history inspection, and restore.
+**Progress (2026-09-16): activated on the real schema-v5 database.** Archive, supersede, and restore are separate append-only task disposition records rather than lifecycle states. The active console, REST, CLI, and MCP lists hide archived or superseded tasks by default while scheduler dependency checks retain the complete graph. Every decision requires a reason; supersede also requires a same-project replacement. Queued, running, review, actively dispatched, and still-required upstream tasks are rejected. Restore makes the original Task visible again without changing its status, Runs, events, gates, receipts, or dependencies. SQLite immediate transactions prevent concurrent disposition heads. Desktop/mobile browser tests exercise supersede, history inspection, and restore; a real reversible archive/restore round trip preserved the original draft state, database integrity, and Receipt chain after the v4→v5 migration.
 
 **Current gap:** several early Alpha tasks remain draft or blocked even though their work was completed outside those original Runs. Directly marking them completed would manufacture lifecycle evidence, while leaving them mixed with live work confuses the backlog.
 
