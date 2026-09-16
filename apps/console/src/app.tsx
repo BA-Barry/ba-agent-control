@@ -1148,27 +1148,32 @@ function ApprovalsPage() {
   const text = useText()
   const { data } = useConsoleSnapshot()
   const queryCache = useQueryClient()
-  const [decisions, setDecisions] = useState<Record<string, 'approved' | 'rejected'>>({})
+  type ConsoleApprovalDecision = 'approved' | 'approved_for_session' | 'rejected'
+  const [decisions, setDecisions] = useState<Record<string, ConsoleApprovalDecision>>({})
   const [feedback, setFeedback] = useState('')
   const approvalMutation = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) => {
+    mutationFn: ({ id, decision }: { id: string; decision: ConsoleApprovalDecision }) => {
       if (!data.csrfToken) throw new Error('Live session is unavailable')
       return respondApproval(id, decision, data.csrfToken)
     },
     onSuccess: async (_response, variables) => {
       setDecisions((value) => ({ ...value, [variables.id]: variables.decision }))
-      setFeedback(variables.decision === 'approved' ? text('审批已记录并发送到运行时。', 'Approval recorded and sent to the runtime.') : text('拒绝决定已记录并发送到运行时。', 'Rejection recorded and sent to the runtime.'))
+      setFeedback(variables.decision === 'approved_for_session'
+        ? text('当前 Codex 会话已允许同类运行时请求；受保护动作不受影响。', 'Equivalent runtime requests are allowed for this Codex session; protected actions remain unaffected.')
+        : variables.decision === 'approved'
+          ? text('审批已记录并发送到运行时。', 'Approval recorded and sent to the runtime.')
+          : text('拒绝决定已记录并发送到运行时。', 'Rejection recorded and sent to the runtime.'))
       await queryCache.invalidateQueries({ queryKey: ['console-snapshot'] })
     },
     onError: (error) => setFeedback(error instanceof Error ? error.message : text('审批响应失败。', 'Approval response failed.')),
   })
-  const decide = (id: string, decision: 'approved' | 'rejected') => {
+  const decide = (id: string, decision: ConsoleApprovalDecision) => {
     if (data.source === 'live') approvalMutation.mutate({ id, decision })
     else setDecisions((value) => ({ ...value, [id]: decision }))
   }
-  return <section className="register-page"><PageHeader titleZh="审批中心" titleEn="Approval center" descriptionZh="push、merge、deploy、删除与权限提升始终由人确认，并保留决定证据。" descriptionEn="Push, merge, deploy, deletion, and elevation always require a human decision with evidence." />
+  return <section className="register-page"><PageHeader titleZh="审批中心" titleEn="Approval center" descriptionZh="运行时工具可批准一次或仅在当前会话允许；push、merge、deploy、删除与权限提升始终逐次确认。" descriptionEn="Runtime tools can be approved once or for the current session; push, merge, deploy, deletion, and elevation always require an individual decision." />
     {feedback && <p className="operation-feedback" role="status">{feedback}</p>}
-    {data.approvals.length === 0 ? <EmptyRegister titleZh="没有待审批事项" titleEn="No pending approvals" detailZh="需要人工确认的 push、merge、deploy、删除或权限提升会出现在这里。" detailEn="Push, merge, deploy, delete, or elevation requests that need a person appear here." /> : <div className="approval-register">{data.approvals.map((approval, index) => <article key={approval.id} className="approval-register-row"><div className="approval-number mono">AP-{String(index + 1).padStart(2, '0')}</div><div><span className="measure-label">{approval.action.toUpperCase()} · {text(approval.requestedAt, approval.requestedAtEn)}</span><h3>{text(approval.title, approval.titleEn)}</h3><p className="mono">{approval.requestedBy}<br />{approval.detail}</p></div><span className="verification-stamp">{approval.risk === 'high' ? text('高风险', 'High risk') : text('中风险', 'Medium risk')}</span><div className="approval-decision">{decisions[approval.id] ? <strong className={decisions[approval.id] === 'approved' ? 'accent-green' : 'accent-red'}>{decisions[approval.id] === 'approved' ? text('已批准', 'Approved') : text('已拒绝', 'Rejected')}</strong> : <><button className="field-action primary" disabled={approvalMutation.isPending} onClick={() => decide(approval.id, 'approved')}>{text('批准一次', 'Approve once')}</button><button className="field-action" disabled={approvalMutation.isPending} onClick={() => decide(approval.id, 'rejected')}>{text('拒绝', 'Reject')}</button></>}</div></article>)}</div>}
+    {data.approvals.length === 0 ? <EmptyRegister titleZh="没有待审批事项" titleEn="No pending approvals" detailZh="需要人工确认的运行时工具或受保护动作会出现在这里。" detailEn="Runtime tools and protected actions that need a person appear here." /> : <div className="approval-register">{data.approvals.map((approval, index) => <article key={approval.id} className="approval-register-row"><div className="approval-number mono">AP-{String(index + 1).padStart(2, '0')}</div><div><span className="measure-label">{approval.action.toUpperCase()} · {text(approval.requestedAt, approval.requestedAtEn)}</span><h3>{text(approval.title, approval.titleEn)}</h3><p className="mono">{approval.requestedBy}<br />{approval.detail}</p>{approval.sessionApprovable && <small className="session-scope-note">{text('会话允许仅作用于当前 Codex 会话的同类运行时请求。', 'Session approval applies only to equivalent runtime requests in the current Codex session.')}</small>}</div><span className="verification-stamp">{approval.risk === 'high' ? text('高风险', 'High risk') : text('中风险', 'Medium risk')}</span><div className="approval-decision">{decisions[approval.id] ? <strong className={decisions[approval.id] === 'rejected' ? 'accent-red' : 'accent-green'}>{decisions[approval.id] === 'approved_for_session' ? text('本会话已允许', 'Allowed for session') : decisions[approval.id] === 'approved' ? text('已批准', 'Approved') : text('已拒绝', 'Rejected')}</strong> : <>{approval.sessionApprovable && <button className="field-action" disabled={approvalMutation.isPending} onClick={() => decide(approval.id, 'approved_for_session')}>{text('本会话允许', 'Allow for session')}</button>}<button className="field-action primary" disabled={approvalMutation.isPending} onClick={() => decide(approval.id, 'approved')}>{text('批准一次', 'Approve once')}</button><button className="field-action" disabled={approvalMutation.isPending} onClick={() => decide(approval.id, 'rejected')}>{text('拒绝', 'Reject')}</button></>}</div></article>)}</div>}
     <section className="protected-actions"><WarningCircle size={21} /><div><strong>{text('受保护动作不会自动放行', 'Protected actions never auto-advance')}</strong><p>{text('每个决定都绑定运行、调用者、目标、风险、时间与后续收据。', 'Each decision binds the run, requester, target, risk, timestamp, and resulting receipt.')}</p></div></section>
   </section>
 }

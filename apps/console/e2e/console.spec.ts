@@ -57,7 +57,7 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, unknown>) {
+async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, unknown>, approvals: Record<string, unknown>[] = []) {
   await page.route('**/api/v1/**', async (route) => {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
     const path = new URL(route.request().url()).pathname
@@ -66,7 +66,15 @@ async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, un
       return
     }
     if (path === '/api/v1/overview') {
-      await json(route, { projects: [], pendingApprovals: 0, runningRuns: 0, failedRuns: 0, orphanedRuns: 0 })
+      await json(route, { projects: [], pendingApprovals: approvals.length, runningRuns: 0, failedRuns: 0, orphanedRuns: 0 })
+      return
+    }
+    if (path === '/api/v1/approvals') {
+      await json(route, approvals)
+      return
+    }
+    if (path.startsWith('/api/v1/approvals/') && path.endsWith('/respond') && route.request().method() === 'POST') {
+      await json(route, { approval: { status: 'approved' } })
       return
     }
     if (path === '/api/v1/adapters') {
@@ -95,6 +103,33 @@ async function mockEmptyApi(page: Page, delayMs = 0, runtime?: Record<string, un
     await json(route, [])
   })
 }
+
+test('approval center offers session scope only for live runtime requests', async ({ page }) => {
+  const now = '2026-08-25T06:00:00Z'
+  await mockEmptyApi(page, 0, undefined, [
+    {
+      id: '01RUNTIMEAPPROVAL', run_id: '01RUN', kind: 'item/commandExecution/requestApproval', status: 'pending',
+      request: { request_id: 'request-1', payload: { command: ['cargo', 'test'] } }, requested_at: now,
+    },
+    {
+      id: '01PROTECTEDAPPROVAL', run_id: '01RUN', kind: 'protected_git_operation', status: 'pending',
+      request: { operation: 'push', details: { remote: 'origin' } }, requested_at: now,
+    },
+  ])
+  await page.goto('/approvals')
+
+  const runtimeRow = page.locator('.approval-register-row').filter({ hasText: 'COMMAND' })
+  const protectedRow = page.locator('.approval-register-row').filter({ hasText: 'PUSH' })
+  await expect(runtimeRow.getByRole('button', { name: '本会话允许' })).toBeVisible()
+  await expect(protectedRow.getByRole('button', { name: '本会话允许' })).toHaveCount(0)
+
+  const requestPromise = page.waitForRequest((request) => request.url().endsWith('/api/v1/approvals/01RUNTIMEAPPROVAL/respond'))
+  await runtimeRow.getByRole('button', { name: '本会话允许' }).click()
+  const request = await requestPromise
+  expect(request.postDataJSON()).toMatchObject({ decision: 'approved_for_session' })
+  await expect(runtimeRow.getByText('本会话已允许')).toBeVisible()
+  await expectNoA11yViolations(page)
+})
 
 async function mockDemoFallback(page: Page) {
   await page.route('**/api/v1/**', (route) => json(route, {

@@ -32,6 +32,7 @@ use crate::{
 struct HoldingRuntime {
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
     launches: Arc<Mutex<Vec<(String, RunRequest)>>>,
+    approvals: Arc<Mutex<Vec<(String, String, ApprovalDecision)>>>,
 }
 
 impl HoldingRuntime {
@@ -40,6 +41,7 @@ impl HoldingRuntime {
         Self {
             events,
             launches: Arc::new(Mutex::new(Vec::new())),
+            approvals: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -87,10 +89,14 @@ impl RuntimeAdapter for HoldingRuntime {
     }
     async fn respond_approval(
         &self,
-        _run_id: &str,
-        _request_id: &str,
-        _decision: ApprovalDecision,
+        run_id: &str,
+        request_id: &str,
+        decision: ApprovalDecision,
     ) -> Result<(), RuntimeError> {
+        self.approvals
+            .lock()
+            .map_err(|_| RuntimeError::Protocol("approval log poisoned".into()))?
+            .push((run_id.to_owned(), request_id.to_owned(), decision));
         Ok(())
     }
 }
@@ -561,6 +567,16 @@ fn store_fixture(status: RunStatus) -> Result<StoreFixture, Box<dyn std::error::
         task_id,
         run_id,
     })
+}
+
+fn attach_runtime_handle(fixture: &StoreFixture) -> Result<(), Box<dyn std::error::Error>> {
+    let mut run = fixture
+        .store
+        .get_run(&fixture.run_id)?
+        .ok_or_else(|| missing("run missing"))?;
+    run.runtime_run_id = Some("holding-1".into());
+    fixture.store.upsert_run(&run)?;
+    Ok(())
 }
 
 #[test]
@@ -1503,6 +1519,201 @@ fn runtime_rejection_resumes_after_the_last_pending_approval()
             .ok_or_else(|| missing("resumed run missing"))?
             .status,
         RunStatus::Running
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_coordinator_rejection_of_protected_operation_finishes_the_run()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let mut task = fixture
+        .store
+        .get_task(&fixture.task_id)?
+        .ok_or_else(|| missing("task missing"))?;
+    task.status = TaskStatus::Running;
+    fixture.store.upsert_task(&task)?;
+    let approvals = ApprovalCoordinator::new(fixture.store.clone());
+    let rejected = approvals
+        .request_git_operation(&fixture.run_id, GitOperation::Deploy, &json!({}))?
+        .ok_or_else(|| missing("deploy approval missing"))?;
+    let sibling = approvals
+        .request_git_operation(&fixture.run_id, GitOperation::Push, &json!({}))?
+        .ok_or_else(|| missing("push approval missing"))?;
+    let runtime = Arc::new(HoldingRuntime::new());
+    let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
+
+    control
+        .respond_approval(
+            &rejected.id,
+            ApprovalResolution::Reject,
+            ApprovalDecision::Decline,
+            &json!({"actor": "test"}),
+        )
+        .await?;
+
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::Failed
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_task(&fixture.task_id)?
+            .ok_or_else(|| missing("task missing"))?
+            .status,
+        TaskStatus::Failed
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_approval(&sibling.id)?
+            .ok_or_else(|| missing("sibling approval missing"))?
+            .status,
+        ApprovalStatus::Cancelled
+    );
+    assert!(
+        runtime
+            .approvals
+            .lock()
+            .map_err(|_| missing("approval log poisoned"))?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_coordinator_rejects_session_scope_for_protected_operations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let approval = ApprovalCoordinator::new(fixture.store.clone())
+        .request_git_operation(&fixture.run_id, GitOperation::Push, &json!({}))?
+        .ok_or_else(|| missing("push approval missing"))?;
+    let control = RuntimeCoordinator::new(fixture.store.clone(), Arc::new(HoldingRuntime::new()));
+
+    let result = control
+        .respond_approval(
+            &approval.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::AcceptForSession,
+            &json!({"actor": "test"}),
+        )
+        .await;
+    let Err(error) = result else {
+        return Err(Box::<dyn std::error::Error>::from(missing(
+            "protected operations accepted session approval",
+        )));
+    };
+
+    assert!(matches!(error, SchedulerError::InvalidApprovalDecision(_)));
+    assert_eq!(
+        fixture
+            .store
+            .get_approval(&approval.id)?
+            .ok_or_else(|| missing("approval missing"))?
+            .status,
+        ApprovalStatus::Pending
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::WaitingApproval
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_coordinator_forwards_session_decision_and_recovers_after_rejection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    attach_runtime_handle(&fixture)?;
+    let approvals = ApprovalCoordinator::new(fixture.store.clone());
+    let rejected = approvals.request_runtime_operation(
+        &fixture.run_id,
+        "item/commandExecution/requestApproval",
+        "request-1",
+        &json!({"command": ["cargo", "test"]}),
+    )?;
+    let session = approvals.request_runtime_operation(
+        &fixture.run_id,
+        "mcpServer/elicitation/request",
+        "request-2",
+        &json!({"server": "local"}),
+    )?;
+    let runtime = Arc::new(HoldingRuntime::new());
+    let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
+
+    control
+        .respond_approval(
+            &rejected.id,
+            ApprovalResolution::Reject,
+            ApprovalDecision::Decline,
+            &json!({"actor": "test"}),
+        )
+        .await?;
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::WaitingApproval
+    );
+
+    control
+        .respond_approval(
+            &session.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::AcceptForSession,
+            &json!({"actor": "test"}),
+        )
+        .await?;
+
+    let duplicate = control
+        .respond_approval(
+            &session.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::AcceptForSession,
+            &json!({"actor": "test"}),
+        )
+        .await;
+    assert!(matches!(
+        duplicate,
+        Err(SchedulerError::ApprovalAlreadyResolved(_))
+    ));
+
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::Running
+    );
+    assert_eq!(
+        *runtime
+            .approvals
+            .lock()
+            .map_err(|_| missing("approval log poisoned"))?,
+        vec![
+            (
+                "holding-1".into(),
+                "request-1".into(),
+                ApprovalDecision::Decline,
+            ),
+            (
+                "holding-1".into(),
+                "request-2".into(),
+                ApprovalDecision::AcceptForSession,
+            ),
+        ]
     );
     Ok(())
 }

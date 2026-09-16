@@ -202,7 +202,8 @@ export interface RunSummary {
 
 export interface ApprovalSummary {
   id: string
-  action: 'push' | 'merge' | 'deploy' | 'delete' | 'elevate'
+  action: 'push' | 'merge' | 'deploy' | 'delete' | 'elevate' | 'command' | 'mcp' | 'file-change' | 'runtime'
+  sessionApprovable: boolean
   title: string
   titleEn: string
   detail: string

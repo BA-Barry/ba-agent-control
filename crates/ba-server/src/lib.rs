@@ -1777,8 +1777,17 @@ async fn respond_approval(
         .control
         .respond_approval(&approval_id, resolution, runtime_decision, &evidence)
         .await
-        .map_err(ApiError::bad_gateway)?;
+        .map_err(approval_response_error)?;
     Ok(Json(json!({"approval": approval, "event": event})))
+}
+
+fn approval_response_error(error: SchedulerError) -> ApiError {
+    match error {
+        SchedulerError::InvalidApprovalDecision(_) => ApiError::bad_request(error.to_string()),
+        SchedulerError::ApprovalAlreadyResolved(_) => ApiError::conflict(error.to_string()),
+        SchedulerError::Store(_) => ApiError::internal(error),
+        _ => ApiError::bad_gateway(error),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2345,6 +2354,15 @@ mod tests {
         assert_eq!(codex["authenticated"], true);
         assert_eq!(codex["app_server"], true);
         Ok(())
+    }
+
+    #[test]
+    fn invalid_approval_scope_is_a_client_error() {
+        let error = approval_response_error(SchedulerError::InvalidApprovalDecision(
+            "session scope is not valid for a protected operation".into(),
+        ));
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, "bad_request");
     }
 
     #[tokio::test]

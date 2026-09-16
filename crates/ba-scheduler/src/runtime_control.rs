@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use ba_core::{AgentProfile, Approval, EntityId, Run, RunEvent, RunStatus, Task, TaskStatus, now};
+use ba_core::{
+    AgentProfile, Approval, ApprovalStatus, EntityId, Run, RunEvent, RunStatus, Task, TaskStatus,
+    now,
+};
 use ba_runtime::{
     ApprovalDecision, ResumeRequest, RunRequest, RuntimeAdapter, RuntimeEvent, RuntimeEventKind,
     RuntimeTransport, SandboxMode, StdioMcpServer,
@@ -626,7 +629,13 @@ impl RuntimeCoordinator {
             .store
             .get_approval(approval_id)?
             .ok_or_else(|| SchedulerError::ApprovalAlreadyResolved(approval_id.to_string()))?;
-        if let Some(request_id) = pending.request.get("request_id").and_then(Value::as_str) {
+        if pending.status != ApprovalStatus::Pending {
+            return Err(SchedulerError::ApprovalAlreadyResolved(
+                approval_id.to_string(),
+            ));
+        }
+        let request_id = pending.request.get("request_id").and_then(Value::as_str);
+        if let Some(request_id) = request_id {
             let run = self.active_run(&pending.run_id)?;
             let runtime_run_id = run.runtime_run_id.as_deref().ok_or_else(|| {
                 SchedulerError::NotActive("approval run has no live runtime handle".into())
@@ -634,20 +643,30 @@ impl RuntimeCoordinator {
             self.runtime
                 .respond_approval(runtime_run_id, request_id, runtime_decision)
                 .await?;
+        } else if runtime_decision == ApprovalDecision::AcceptForSession {
+            return Err(SchedulerError::InvalidApprovalDecision(
+                "session approval is available only for live runtime requests; protected Git and deployment operations require an individual decision".into(),
+            ));
         }
-        let approval = ApprovalCoordinator::new(self.store.clone()).resolve_runtime(
-            approval_id,
-            resolution,
-            evidence,
-        )?;
-        let run = self
-            .store
-            .get_run(&approval.run_id)?
-            .ok_or_else(|| SchedulerError::NotActive(approval.run_id.to_string()))?;
-        let event = if matches!(run.status, RunStatus::Failed | RunStatus::Cancelled) {
+        let approvals = ApprovalCoordinator::new(self.store.clone());
+        let approval = if request_id.is_some() {
+            approvals.resolve_runtime(approval_id, resolution, evidence)?
+        } else {
+            approvals.resolve_managed(approval_id, resolution, evidence)?
+        };
+        let terminal = if request_id.is_none() {
+            match resolution {
+                ApprovalResolution::Reject => Some(RunStatus::Failed),
+                ApprovalResolution::Cancel => Some(RunStatus::Cancelled),
+                ApprovalResolution::Approve => None,
+            }
+        } else {
+            None
+        };
+        let event = if let Some(status) = terminal {
             self.finish_run(
                 &approval.run_id,
-                run.status,
+                status,
                 "approval.resolved",
                 json!({"approval": &approval}),
             )?

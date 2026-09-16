@@ -328,13 +328,30 @@ function titleFromKind(kind: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
-function approvalAction(kind: string): ApprovalSummary['action'] {
-  const normalized = kind.toLowerCase()
+function approvalAction(kind: string, request: unknown): ApprovalSummary['action'] {
+  const operation = request && typeof request === 'object' && 'operation' in request
+    ? String(request.operation)
+    : ''
+  const normalized = `${kind} ${operation}`.toLowerCase()
   if (normalized.includes('push')) return 'push'
   if (normalized.includes('merge')) return 'merge'
   if (normalized.includes('deploy')) return 'deploy'
   if (normalized.includes('delete') || normalized.includes('remove')) return 'delete'
-  return 'elevate'
+  if (normalized.includes('command') || normalized.includes('exec')) return 'command'
+  if (normalized.includes('mcp') || normalized.includes('elicitation')) return 'mcp'
+  if (normalized.includes('patch') || normalized.includes('filechange')) return 'file-change'
+  if (normalized.includes('elevat')) return 'elevate'
+  return 'runtime'
+}
+
+function isSessionApprovable(request: unknown) {
+  return Boolean(
+    request
+    && typeof request === 'object'
+    && 'request_id' in request
+    && typeof request.request_id === 'string'
+    && request.request_id,
+  )
 }
 
 function gateEvidence(result: unknown) {
@@ -494,12 +511,13 @@ function mapSnapshot(
     const run = runById.get(approval.run_id)
     const task = run ? taskById.get(run.task_id) : undefined
     const profile = run?.agent_profile_id ? profileById.get(run.agent_profile_id) : undefined
-    const action = approvalAction(approval.kind)
+    const action = approvalAction(approval.kind, approval.request)
     const relative = relativeTime(approval.requested_at)
     const title = titleFromKind(approval.kind)
     return {
       id: approval.id,
       action,
+      sessionApprovable: isSessionApprovable(approval.request),
       title,
       titleEn: title,
       detail: stableDetail(approval.request),
@@ -627,7 +645,7 @@ async function mutate<T>(path: string, csrfToken: string, body?: unknown): Promi
   })
 }
 
-export function respondApproval(id: string, decision: 'approved' | 'rejected', csrfToken: string) {
+export function respondApproval(id: string, decision: 'approved' | 'approved_for_session' | 'rejected', csrfToken: string) {
   return mutate(`/api/v1/approvals/${encodeURIComponent(id)}/respond`, csrfToken, {
     decision,
     reason: 'Decided in the local BA Agent console',

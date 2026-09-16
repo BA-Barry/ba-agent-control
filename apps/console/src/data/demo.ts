@@ -191,6 +191,7 @@ export const approvals: ApprovalSummary[] = [
   {
     id: '01JBAPPROVAL00000000000001',
     action: 'push',
+    sessionApprovable: false,
     title: '推送运行时握手分支',
     titleEn: 'Push the runtime-handshake branch',
     detail: 'ba/runtime/runtime-009 → origin',
@@ -202,6 +203,7 @@ export const approvals: ApprovalSummary[] = [
   {
     id: '01JBAPPROVAL00000000000002',
     action: 'delete',
+    sessionApprovable: false,
     title: '删除已闭合 worktree',
     titleEn: 'Delete the closed worktree',
     detail: 'G:\\BA Agent Data\\worktrees\\core-008',

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { archiveTask, cancelDispatch, createMilestone, createProject, createReviewRepairLoop, createTask, decideReviewRepairLoop, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadInactiveTasks, loadReviewRepairLoops, loadTaskDispositionHistory, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, restoreTask, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents, supersedeTask } from './console'
+import { archiveTask, cancelDispatch, createMilestone, createProject, createReviewRepairLoop, createTask, decideReviewRepairLoop, dispatchTask, instantiateWorkflow, loadConsoleSnapshot, loadHandoffs, loadInactiveTasks, loadReviewRepairLoops, loadTaskDispositionHistory, loadWorkflowTemplates, mapRunEvent, materializeWorkflowTemplate, onboardProject, reorderDispatchQueue, respondApproval, restoreTask, retryRun, runConfiguredGate, setGlobalConcurrency, setProjectConcurrency, subscribeRunEvents, supersedeTask } from './console'
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), {
@@ -34,7 +34,10 @@ test('maps the authenticated local API into a live console snapshot', async () =
     if (url === '/api/v1/session') return json({ csrfToken: 'csrf', origin: 'http://127.0.0.1:41415', expiresInSeconds: 28800 })
     if (url === '/api/v1/overview') return json({ projects: [project], pendingApprovals: 1, runningRuns: 1, failedRuns: 0, orphanedRuns: 0 })
     if (url === '/api/v1/agent-profiles') return json([{ id: run.agent_profile_id, name: 'Implementer', role: 'implementer', runtime: 'codex', config: { sandboxMode: 'workspace-write' } }])
-    if (url === '/api/v1/approvals') return json([{ id: '01APPROVAL000000000000001', run_id: run.id, kind: 'git.push', status: 'pending', request: { branch: 'ba/live' }, requested_at: '2026-08-24T10:01:00Z' }])
+    if (url === '/api/v1/approvals') return json([
+      { id: '01APPROVAL000000000000001', run_id: run.id, kind: 'protected_git_operation', status: 'pending', request: { operation: 'push', details: { branch: 'ba/live' } }, requested_at: '2026-08-24T10:01:00Z' },
+      { id: '01APPROVAL000000000000002', run_id: run.id, kind: 'item/commandExecution/requestApproval', status: 'pending', request: { request_id: 'runtime-request-1', payload: { command: ['cargo', 'test'] } }, requested_at: '2026-08-24T10:02:00Z' },
+    ])
     if (url === '/api/v1/adapters') return json({ adapters: [{ id: 'codex', capabilities: {
       available: true, authenticated: true, version: { major: 0, minor: 149, patch: 1 },
       app_server: true, exec_json_fallback: true, approvals: true, resume: true,
@@ -82,10 +85,26 @@ test('maps the authenticated local API into a live console snapshot', async () =
     threadId: 'thread-1',
     eventSequence: 17,
   })
-  expect(snapshot.approvals[0]).toMatchObject({ action: 'push', risk: 'medium' })
+  expect(snapshot.approvals[0]).toMatchObject({ action: 'push', risk: 'medium', sessionApprovable: false })
+  expect(snapshot.approvals[1]).toMatchObject({ action: 'command', risk: 'medium', sessionApprovable: true })
   expect(snapshot.runtime).toMatchObject({ available: true, authenticated: true, version: '0.149.1', appServer: true })
   expect(snapshot.scheduler).toMatchObject({ globalMaxConcurrency: 4 })
   expect(snapshot.metrics).toMatchObject({ pendingApprovals: 1, runningRuns: 1, receiptCount: 1, receiptHead: 'abcdef1234567890' })
+})
+
+test('posts an explicit current-session runtime approval decision', async () => {
+  const fetchMock = vi.fn(() => json({ approval: { status: 'approved' } }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await respondApproval('01APPROVAL', 'approved_for_session', 'csrf-token')
+
+  expect(fetchMock).toHaveBeenCalledWith('/api/v1/approvals/01APPROVAL/respond', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({
+      decision: 'approved_for_session',
+      reason: 'Decided in the local BA Agent console',
+    }),
+  }))
 })
 
 test('falls back explicitly when the local service is unavailable', async () => {

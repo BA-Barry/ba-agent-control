@@ -100,6 +100,8 @@ pub enum SchedulerError {
     NotActive(String),
     #[error("approval is already resolved: {0}")]
     ApprovalAlreadyResolved(String),
+    #[error("invalid approval decision: {0}")]
+    InvalidApprovalDecision(String),
     #[error("approval does not belong to an active run: {0}")]
     ApprovalRunInactive(String),
     #[error("gate definition is invalid: {0}")]

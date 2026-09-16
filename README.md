@@ -15,7 +15,7 @@ BA Agent (`ba-agent-control`) is a local-first control plane for coordinating au
 - Share a durable global run pool across projects (default four), apply project-specific caps, and automatically start queued work in dependency/submission order while serializing overlapping writers.
 - Isolate writes in Git worktrees and protect path scopes.
 - Run configurable quality gates, create local commits, and preserve receipts.
-- Control runs, approvals, gates, and receipts through the loopback HTTP/SSE API and MCP tools.
+- Control runs, approvals, gates, and receipts through the loopback HTTP/SSE API and MCP tools; approve equivalent live runtime requests for the current Codex session without weakening per-operation Git/deploy boundaries.
 - Probe GitHub credentials safely and inspect repository metadata without enabling remote writes.
 - Generate Codex and Claude-compatible project configuration without overwriting user-owned content.
 - Import and safely restore runtime state snapshots as immutable, receipt-backed evidence without bypassing BA Agent state machines.

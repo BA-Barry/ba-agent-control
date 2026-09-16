@@ -126,7 +126,27 @@ impl ApprovalCoordinator {
         resolution: ApprovalResolution,
         evidence: &Value,
     ) -> Result<Approval, SchedulerError> {
-        self.resolve_with_policy(approval_id, resolution, evidence, true)
+        self.resolve_with_policy(approval_id, resolution, evidence, true, false)
+    }
+
+    /// Resolve a protected approval while leaving terminal Run synchronization
+    /// to [`crate::RuntimeCoordinator`].
+    ///
+    /// This keeps the approval record and sibling cancellation in one policy
+    /// boundary while allowing the runtime coordinator to atomically finish the
+    /// Run, Task, Dispatch, and terminal event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the approval is missing/already resolved, its Run is no
+    /// longer active, or durable state cannot be updated.
+    pub(crate) fn resolve_managed(
+        &self,
+        approval_id: &EntityId,
+        resolution: ApprovalResolution,
+        evidence: &Value,
+    ) -> Result<Approval, SchedulerError> {
+        self.resolve_with_policy(approval_id, resolution, evidence, true, true)
     }
 
     /// Resolve a runtime approval without prematurely deciding the Run outcome.
@@ -145,7 +165,7 @@ impl ApprovalCoordinator {
         resolution: ApprovalResolution,
         evidence: &Value,
     ) -> Result<Approval, SchedulerError> {
-        self.resolve_with_policy(approval_id, resolution, evidence, false)
+        self.resolve_with_policy(approval_id, resolution, evidence, false, false)
     }
 
     fn resolve_with_policy(
@@ -154,6 +174,7 @@ impl ApprovalCoordinator {
         resolution: ApprovalResolution,
         evidence: &Value,
         terminate_on_rejection: bool,
+        defer_terminal_transition: bool,
     ) -> Result<Approval, SchedulerError> {
         let mut approval = self
             .store
@@ -179,17 +200,18 @@ impl ApprovalCoordinator {
             )
         {
             self.cancel_sibling_approvals(&approval)?;
-            let run = self
-                .store
-                .get_run(&approval.run_id)?
-                .ok_or_else(|| SchedulerError::ApprovalRunInactive(approval.run_id.to_string()))?;
-            if run.status == RunStatus::WaitingApproval {
-                let terminal = if resolution == ApprovalResolution::Cancel {
-                    RunStatus::Cancelled
-                } else {
-                    RunStatus::Failed
-                };
-                self.store.transition_run(&approval.run_id, terminal)?;
+            if !defer_terminal_transition {
+                let run = self.store.get_run(&approval.run_id)?.ok_or_else(|| {
+                    SchedulerError::ApprovalRunInactive(approval.run_id.to_string())
+                })?;
+                if run.status == RunStatus::WaitingApproval {
+                    let terminal = if resolution == ApprovalResolution::Cancel {
+                        RunStatus::Cancelled
+                    } else {
+                        RunStatus::Failed
+                    };
+                    self.store.transition_run(&approval.run_id, terminal)?;
+                }
             }
         } else {
             let any_pending = self
