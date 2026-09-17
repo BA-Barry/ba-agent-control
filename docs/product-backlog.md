@@ -100,6 +100,12 @@ Scheduler tests cover protected rejection, protected session-scope refusal, runt
 
 **Observed evidence:** during the live MCP approval bridge acceptance, a Planner successfully verified the incoming handoff but then attempted an outgoing `handoff.create` with an empty destination list. BA Agent rejected that invalid request and preserved the resulting failed Run instead of manufacturing success. The prompt refinement prevents the same terminal-node mistake in future managed launches.
 
+## Next correctness priority: downstream code visibility
+
+**Observed (2026-09-17):** `WorktreeManager::create_detached` always resolves the project checkout's `HEAD`; dispatch does not select a completed dependency's commit. Read-only runs default to the project checkout. An Implementer can therefore produce a successful isolated commit while the dependent Test Engineer or Reviewer starts on the earlier checkout. Structured handoff text conveys findings but does not itself select the code being tested.
+
+**Required outcome:** downstream testing and review must inspect the exact upstream implementation, and a repair round must begin with the prior round's changes. Resolve and persist the selected existing Git revision, use isolated task worktrees, and surface conflicting dependency branches for an explicit integration decision. Preserve the current human approval boundary for merging into the user's branch. Prove the behavior with a real temporary repository where only the upstream commit contains the changed file, then run the live review/repair acceptance. This is a correctness gap to address before claiming the multi-Agent delivery loop is complete.
+
 ## Role-extension rule
 
 Do not add a new Agent profile merely for a new topic. Prefer a Skill or workflow template when the existing role, permissions, and review perspective remain correct. Add a role only after repeated tasks demonstrate a distinct durable responsibility, permission boundary, or evaluation standard. Increasing the number of roles must not be presented as increasing runtime concurrency.
