@@ -634,6 +634,13 @@ impl RuntimeCoordinator {
                 approval_id.to_string(),
             ));
         }
+        if runtime_decision == ApprovalDecision::AcceptForSession
+            && !crate::approval_supports_session(&pending)
+        {
+            return Err(SchedulerError::InvalidApprovalDecision(
+                "this request does not support session approval; MCP elicitation, permission elevation and protected operations require an individual decision".into(),
+            ));
+        }
         let request_id = pending.request.get("request_id").and_then(Value::as_str);
         if let Some(request_id) = request_id {
             let run = self.active_run(&pending.run_id)?;
@@ -643,16 +650,13 @@ impl RuntimeCoordinator {
             self.runtime
                 .respond_approval(runtime_run_id, request_id, runtime_decision)
                 .await?;
-        } else if runtime_decision == ApprovalDecision::AcceptForSession {
-            return Err(SchedulerError::InvalidApprovalDecision(
-                "session approval is available only for live runtime requests; protected Git and deployment operations require an individual decision".into(),
-            ));
         }
         let approvals = ApprovalCoordinator::new(self.store.clone());
+        let evidence = json!({"runtime_decision": runtime_decision, "user_evidence": evidence});
         let approval = if request_id.is_some() {
-            approvals.resolve_runtime(approval_id, resolution, evidence)?
+            approvals.resolve_runtime(approval_id, resolution, &evidence)?
         } else {
-            approvals.resolve_managed(approval_id, resolution, evidence)?
+            approvals.resolve_managed(approval_id, resolution, &evidence)?
         };
         let terminal = if request_id.is_none() {
             match resolution {

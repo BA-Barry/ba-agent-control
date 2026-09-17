@@ -19,7 +19,7 @@ mod runtime_control;
 mod task_disposition;
 mod workflow;
 
-pub use approval::{ApprovalCoordinator, ApprovalResolution};
+pub use approval::{ApprovalCoordinator, ApprovalResolution, approval_supports_session};
 pub use dispatch::{DispatchBundle, DispatchCoordinator};
 pub use finalize::{FinalizationCoordinator, FinalizationResult};
 pub use gate::{

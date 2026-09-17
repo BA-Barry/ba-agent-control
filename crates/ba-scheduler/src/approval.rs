@@ -6,6 +6,30 @@ use serde_json::{Value, json};
 
 use crate::SchedulerError;
 
+/// Whether this request supports session reuse within BA Agent's policy.
+/// MCP elicitation has no session decision; permission elevation stays per-call.
+#[must_use]
+pub fn approval_supports_session(approval: &Approval) -> bool {
+    if !matches!(
+        approval.kind.as_str(),
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
+    ) || approval
+        .request
+        .get("request_id")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+    let payload = &approval.request["payload"];
+    let params = payload.get("params").unwrap_or(payload);
+    match params.get("availableDecisions") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(decisions)) => decisions.iter().any(|value| value == "acceptForSession"),
+        Some(_) => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalResolution {

@@ -1743,7 +1743,18 @@ fn event_to_sse(event: &RunEvent) -> Event {
 }
 
 async fn list_approvals(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(state.store.list_pending_approvals()?)))
+    let approvals = state
+        .store
+        .list_pending_approvals()?
+        .iter()
+        .map(|approval| {
+            let mut resource = json!(approval);
+            resource["sessionApprovable"] =
+                json!(ba_scheduler::approval_supports_session(approval));
+            resource
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!(approvals)))
 }
 
 #[derive(Debug, Deserialize)]

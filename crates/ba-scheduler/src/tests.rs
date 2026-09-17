@@ -1643,9 +1643,9 @@ async fn runtime_coordinator_forwards_session_decision_and_recovers_after_reject
     )?;
     let session = approvals.request_runtime_operation(
         &fixture.run_id,
-        "mcpServer/elicitation/request",
+        "item/commandExecution/requestApproval",
         "request-2",
-        &json!({"server": "local"}),
+        &json!({"params": {"command": "cargo test", "availableDecisions": ["accept", "acceptForSession", "decline"]}}),
     )?;
     let runtime = Arc::new(HoldingRuntime::new());
     let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
@@ -1688,6 +1688,17 @@ async fn runtime_coordinator_forwards_session_decision_and_recovers_after_reject
         duplicate,
         Err(SchedulerError::ApprovalAlreadyResolved(_))
     ));
+    let recorded = fixture
+        .store
+        .get_approval(&session.id)?
+        .ok_or_else(|| missing("approval missing"))?;
+    assert_eq!(
+        recorded
+            .decision
+            .as_ref()
+            .and_then(|value| value.pointer("/evidence/runtime_decision")),
+        Some(&json!("accept_for_session"))
+    );
 
     assert_eq!(
         fixture
@@ -1715,6 +1726,79 @@ async fn runtime_coordinator_forwards_session_decision_and_recovers_after_reject
             ),
         ]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_approval_respects_protocol_capabilities() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = store_fixture(RunStatus::Running)?;
+    attach_runtime_handle(&fixture)?;
+    let runtime = Arc::new(HoldingRuntime::new());
+    let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
+    let approvals = ApprovalCoordinator::new(fixture.store.clone());
+    for (method, params) in [
+        ("mcpServer/elicitation/request", json!({})),
+        (
+            "item/permissions/requestApproval",
+            json!({"permissions": {"network": {"enabled": true}}}),
+        ),
+        ("item/unknown/requestApproval", json!({})),
+        (
+            "item/commandExecution/requestApproval",
+            json!({"availableDecisions": ["accept", "decline"]}),
+        ),
+        (
+            "item/commandExecution/requestApproval",
+            json!({"availableDecisions": []}),
+        ),
+    ] {
+        let approval = approvals.request_runtime_operation(
+            &fixture.run_id,
+            method,
+            method,
+            &json!({"params": params}),
+        )?;
+        assert!(!crate::approval_supports_session(&approval));
+        assert!(matches!(
+            control
+                .respond_approval(
+                    &approval.id,
+                    ApprovalResolution::Approve,
+                    ApprovalDecision::AcceptForSession,
+                    &json!({})
+                )
+                .await,
+            Err(SchedulerError::InvalidApprovalDecision(_))
+        ));
+        assert_eq!(
+            fixture
+                .store
+                .get_approval(&approval.id)?
+                .ok_or_else(|| missing("approval missing"))?
+                .status,
+            ApprovalStatus::Pending
+        );
+    }
+    assert!(
+        runtime
+            .approvals
+            .lock()
+            .map_err(|_| missing("approval log poisoned"))?
+            .is_empty()
+    );
+    for method in [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+    ] {
+        let approval = approvals.request_runtime_operation(
+            &fixture.run_id,
+            method,
+            method,
+            &json!({"params": {}}),
+        )?;
+        assert!(crate::approval_supports_session(&approval));
+    }
     Ok(())
 }
 

@@ -42,11 +42,11 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | --- | --- | --- |
 | App Server first, `codex exec --json` fallback, Codex CLI 0.130.0+ handshake | Proven locally | Schema fixture contract tests, fallback tests, live ignored integration evidence |
 | Global concurrency default four with project caps and durable overflow | Proven locally | Live four-agent demonstration; durable queue/refill tests; independent SQLite-connection admission test; CLI/API/MCP/console queue and policy controls; overlapping write-scope serialization |
-| Bounded review/repair orchestration | Proven locally | Atomic loop/task-graph persistence; separate repair and confirmation tasks; decision/limit/block transitions; CLI, REST, MCP and desktop/mobile console tests |
+| Bounded review/repair orchestration | Proven in parts | Atomic loop/task-graph persistence; separate repair and confirmation tasks; decision/limit/block transitions; CLI, REST, MCP and desktop/mobile console tests. The real loop recorded in self-hosting evidence was created but not dispatched; complete live implementation → test → review → repair/confirmation evidence is still missing |
 | Detached isolated worktree for writes | Proven locally | Integrated acceptance test creates three distinct worktrees across three repositories; retry tests prove attempt-specific isolation |
 | Overlapping write scopes serialize | Proven locally | Scheduler scope-conflict tests |
 | Gates before local commit and `ba/<workstream>/<task-id>` branch | Proven locally | Scheduler finalize/gate/receipt integration tests |
-| Push, merge, deploy, delete and elevation require approval | Proven locally | Approval state tests and 15 Hook guard fixtures; GitHub adapter has no mutation endpoint |
+| Push, merge, deploy, delete and elevation require approval | Proven locally in tested paths | Approval state tests and 15 Hook guard fixtures; GitHub adapter has no mutation endpoint. Session decisions are restricted to supported command/file-change requests; MCP elicitation, permission elevation and protected operations stay per-call. Concurrent response and interrupted approval delivery need explicit failure-path evidence before a broad safety claim |
 | Crash/orphan recovery and persisted thread resume | Proven locally | Integrated acceptance test reopens SQLite, records an orphaned run, preserves its thread identity and restores it when live |
 
 ### CLI, API, MCP and compatibility
@@ -95,8 +95,10 @@ This deterministic test proves orchestration and persistence without consuming m
 
 ## Remaining blockers and next actions
 
-1. Confirm the role-dispatch, configured-gate, durable-queue and concurrency-setting controls with Narrator and 200% zoom on the exact future release candidate.
-2. Run four-platform certification on that exact release commit after the GitHub Actions billing restriction is resolved or an equivalent explicitly approved clean environment is available.
-3. Request separate approval for public repository visibility, a version tag, GitHub Release and public archives.
+1. Execute a complete live bounded review/repair workflow and verify that testing, review, and confirmation inspect the actual implementation changes across isolated worktrees. Creating the graph alone does not prove this outcome.
+2. Exercise approval response concurrency and interrupted delivery. Current tests cover sequential duplicate refusal and protocol-specific scope decisions, not exactly-once delivery across a process failure.
+3. Confirm the post-pass controls (project onboarding, role dispatch, gates, queue, concurrency, workflow/repair, task history and session approvals) with Narrator and 200% zoom on the exact future release candidate.
+4. Run four-platform certification on that exact release commit; recheck the previously reported GitHub Actions billing restriction before treating it as current.
+5. Obtain separate approval for public repository visibility, a version tag, GitHub Release and public archives.
 
 A private verification remote, authenticated push, CI and hosted candidate workflow were explicitly authorized and completed. Public visibility, tags, GitHub Releases, public archives and deployment remain unauthorized.

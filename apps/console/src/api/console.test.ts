@@ -36,7 +36,7 @@ test('maps the authenticated local API into a live console snapshot', async () =
     if (url === '/api/v1/agent-profiles') return json([{ id: run.agent_profile_id, name: 'Implementer', role: 'implementer', runtime: 'codex', config: { sandboxMode: 'workspace-write' } }])
     if (url === '/api/v1/approvals') return json([
       { id: '01APPROVAL000000000000001', run_id: run.id, kind: 'protected_git_operation', status: 'pending', request: { operation: 'push', details: { branch: 'ba/live' } }, requested_at: '2026-08-24T10:01:00Z' },
-      { id: '01APPROVAL000000000000002', run_id: run.id, kind: 'item/commandExecution/requestApproval', status: 'pending', request: { request_id: 'runtime-request-1', payload: { command: ['cargo', 'test'] } }, requested_at: '2026-08-24T10:02:00Z' },
+      { id: '01APPROVAL000000000000002', run_id: run.id, kind: 'item/commandExecution/requestApproval', sessionApprovable: true, status: 'pending', request: { request_id: 'runtime-request-1', payload: { command: ['cargo', 'test'] } }, requested_at: '2026-08-24T10:02:00Z' },
     ])
     if (url === '/api/v1/adapters') return json({ adapters: [{ id: 'codex', capabilities: {
       available: true, authenticated: true, version: { major: 0, minor: 149, patch: 1 },

@@ -146,6 +146,7 @@ interface ApiApproval {
   status: string
   request: unknown
   requested_at: string
+  sessionApprovable?: boolean
 }
 
 interface ApiGate {
@@ -340,18 +341,8 @@ function approvalAction(kind: string, request: unknown): ApprovalSummary['action
   if (normalized.includes('command') || normalized.includes('exec')) return 'command'
   if (normalized.includes('mcp') || normalized.includes('elicitation')) return 'mcp'
   if (normalized.includes('patch') || normalized.includes('filechange')) return 'file-change'
-  if (normalized.includes('elevat')) return 'elevate'
+  if (normalized.includes('elevat') || normalized.includes('permissions')) return 'elevate'
   return 'runtime'
-}
-
-function isSessionApprovable(request: unknown) {
-  return Boolean(
-    request
-    && typeof request === 'object'
-    && 'request_id' in request
-    && typeof request.request_id === 'string'
-    && request.request_id,
-  )
 }
 
 function gateEvidence(result: unknown) {
@@ -517,7 +508,7 @@ function mapSnapshot(
     return {
       id: approval.id,
       action,
-      sessionApprovable: isSessionApprovable(approval.request),
+      sessionApprovable: approval.sessionApprovable === true,
       title,
       titleEn: title,
       detail: stableDetail(approval.request),

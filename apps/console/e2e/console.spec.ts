@@ -108,20 +108,30 @@ test('approval center offers session scope only for live runtime requests', asyn
   const now = '2026-08-25T06:00:00Z'
   await mockEmptyApi(page, 0, undefined, [
     {
-      id: '01RUNTIMEAPPROVAL', run_id: '01RUN', kind: 'item/commandExecution/requestApproval', status: 'pending',
+      id: '01RUNTIMEAPPROVAL', run_id: '01RUN', kind: 'item/commandExecution/requestApproval', sessionApprovable: true, status: 'pending',
       request: { request_id: 'request-1', payload: { command: ['cargo', 'test'] } }, requested_at: now,
     },
     {
       id: '01PROTECTEDAPPROVAL', run_id: '01RUN', kind: 'protected_git_operation', status: 'pending',
       request: { operation: 'push', details: { remote: 'origin' } }, requested_at: now,
     },
+    {
+      id: '01MCPAPPROVAL', run_id: '01RUN', kind: 'mcpServer/elicitation/request', sessionApprovable: false, status: 'pending',
+      request: { request_id: 'mcp-1', payload: { params: {} } }, requested_at: now,
+    },
+    {
+      id: '01LIMITEDAPPROVAL', run_id: '01RUN', kind: 'item/commandExecution/requestApproval', sessionApprovable: false, status: 'pending',
+      request: { request_id: 'limited-1', payload: { params: { availableDecisions: ['accept', 'decline'] } } }, requested_at: now,
+    },
   ])
   await page.goto('/approvals')
 
-  const runtimeRow = page.locator('.approval-register-row').filter({ hasText: 'COMMAND' })
+  const runtimeRow = page.locator('.approval-register-row').filter({ hasText: 'request-1' })
   const protectedRow = page.locator('.approval-register-row').filter({ hasText: 'PUSH' })
   await expect(runtimeRow.getByRole('button', { name: '本会话允许' })).toBeVisible()
   await expect(protectedRow.getByRole('button', { name: '本会话允许' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '本会话允许' })).toHaveCount(1)
+  await expect(page.locator('.approval-register-row').filter({ hasText: 'mcp-1' }).getByRole('button', { name: '批准一次' })).toBeVisible()
 
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/api/v1/approvals/01RUNTIMEAPPROVAL/respond'))
   await runtimeRow.getByRole('button', { name: '本会话允许' }).click()
