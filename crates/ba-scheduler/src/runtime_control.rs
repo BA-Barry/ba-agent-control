@@ -182,6 +182,18 @@ impl RuntimeCoordinator {
             |worktree| PathBuf::from(&worktree.path),
         );
         let cwd = cwd.canonicalize()?;
+        if let Some(worktree) = &bundle.worktree {
+            self.append_event(
+                &bundle.run.id,
+                "workspace.selected",
+                json!({
+                    "worktreeId": worktree.id,
+                    "baseRevision": worktree.base_revision,
+                    "dependsOn": task.depends_on,
+                    "readOnly": !task.write,
+                }),
+            )?;
+        }
         let handoffs = HandoffService::new(self.store.clone()).list_for_task(&task.id)?;
         let has_direct_downstream = self
             .store

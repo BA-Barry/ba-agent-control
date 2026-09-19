@@ -87,7 +87,7 @@ ba-agent-control workstream instantiate <PROJECT_ID> feature-delivery `
 ba-agent-control workstream materialize <PROJECT_ID> feature-delivery
 ```
 
-上游 Agent 完成后应创建结构化交接，而不是只在聊天里留一句结论。交接目标只能是同一项目中直接依赖该上游任务的下游任务。记录保存在 `.ba-agent/knowledge/handoffs/`，包含结果、决策、证据、变更路径、命令结果、风险和下一步；下游 Run 启动或恢复时会自动注入经校验内容。
+上游 Agent 完成后应创建结构化交接，而不是只在聊天里留一句结论。交接目标只能是同一项目中直接依赖该上游任务的下游任务。记录保存在 `.ba-agent/knowledge/handoffs/`，包含结果、决策、证据、变更路径、命令结果、风险和下一步；下游 Run 启动或恢复时会自动注入经校验内容。代码版本不依赖交接文本传递：BA Agent 会从质量收据解析上游不可变提交，在该提交建立独立工作区；只读测试/审查使用空写入范围和只读沙箱。若多个依赖提交彼此分叉，系统会停止派发并要求先明确整合，不会自动合并或退回旧版主工作区。
 
 ```powershell
 ba-agent-control task handoff-create <SOURCE_TASK_ID> `

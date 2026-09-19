@@ -562,8 +562,14 @@ impl StoreBackend {
                 anyhow::bail!("run belongs to a different task");
             }
         }
+        let cwd = ba_scheduler::task_execution_directory(
+            &self.store,
+            &task,
+            run_id.as_ref(),
+            &project_root,
+        )?;
         let gate = GateCoordinator::new(self.store.clone())
-            .run(&task_id, run_id.as_ref(), &project_root, &definition)
+            .run(&task_id, run_id.as_ref(), &cwd, &definition)
             .await?;
         if let Some(run_id) = &run_id {
             let _event =

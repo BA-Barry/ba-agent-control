@@ -15,6 +15,7 @@ mod policy;
 mod profiles;
 mod recovery;
 mod review_repair;
+mod revision;
 mod runtime_control;
 mod task_disposition;
 mod workflow;
@@ -46,6 +47,7 @@ pub use review_repair::{
     ReviewRepairAction, ReviewRepairLoopDecisionRequest, ReviewRepairLoopService,
     ReviewRepairLoopStartRequest,
 };
+pub use revision::task_execution_directory;
 pub use runtime_control::RuntimeCoordinator;
 pub use task_disposition::TaskDispositionService;
 pub use workflow::{

@@ -18,6 +18,9 @@ use ba_runtime::{
 use ba_store::SqliteStore;
 use serde_json::json;
 
+#[path = "revision_tests.rs"]
+mod revision_tests;
+
 use crate::{
     ApprovalCoordinator, ApprovalResolution, DispatchCoordinator, FinalizationCoordinator,
     GateCoordinator, GateDefinition, GateEligibility, GateRunner, HandoffCommandEvidence,
@@ -974,6 +977,67 @@ async fn passed_configured_gates_complete_read_review_with_receipt()
         TaskStatus::Completed
     );
     fixture.store.verify_receipt_chain(&candidate.project_id)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn finalization_does_not_reuse_a_prior_runs_gate() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let repository = fixture.directory.path();
+    std::fs::create_dir_all(repository.join(".ba-agent"))?;
+    std::fs::write(
+        repository.join(".ba-agent/project.toml"),
+        "[gates]\ncheck = [\"git\", \"--version\"]\n",
+    )?;
+    let candidate = task(&fixture.project_id, "retrying reader", false, &[]);
+    fixture.store.upsert_task(&candidate)?;
+    for status in [
+        TaskStatus::Ready,
+        TaskStatus::Queued,
+        TaskStatus::Running,
+        TaskStatus::Review,
+    ] {
+        fixture.store.transition_task(&candidate.id, status)?;
+    }
+    let timestamp = now();
+    let make_run = || Run {
+        id: EntityId::new(),
+        task_id: candidate.id.clone(),
+        agent_profile_id: None,
+        status: RunStatus::Succeeded,
+        adapter: "codex".into(),
+        runtime_run_id: None,
+        runtime_thread_id: None,
+        started_at: Some(timestamp),
+        finished_at: Some(timestamp),
+        created_at: timestamp,
+        updated_at: timestamp,
+    };
+    let prior = make_run();
+    let current = make_run();
+    fixture.store.upsert_run(&prior)?;
+    fixture.store.upsert_run(&current)?;
+    let definition = configured_gate(repository, "check")?;
+    GateCoordinator::new(fixture.store.clone())
+        .run(&candidate.id, Some(&prior.id), repository, &definition)
+        .await?;
+    let finalizer = FinalizationCoordinator::new(
+        fixture.store.clone(),
+        fixture.directory.path().join("worktrees"),
+    );
+    assert!(
+        finalizer
+            .finalize_if_eligible(&candidate.id, Some(&current.id))?
+            .is_none()
+    );
+    GateCoordinator::new(fixture.store.clone())
+        .run(&candidate.id, Some(&current.id), repository, &definition)
+        .await?;
+    assert!(
+        finalizer
+            .finalize_if_eligible(&candidate.id, Some(&current.id))?
+            .is_some()
+    );
     Ok(())
 }
 

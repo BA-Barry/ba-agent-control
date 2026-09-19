@@ -66,7 +66,12 @@ impl FinalizationCoordinator {
         })?;
         let project_root = PathBuf::from(&project.root_path).canonicalize()?;
         let required = configured_gate_names(&project_root)?;
-        let gates = self.store.list_gates(task_id)?;
+        let gates = self
+            .store
+            .list_gates(task_id)?
+            .into_iter()
+            .filter(|gate| run_id.is_none_or(|id| gate.run_id.as_ref() == Some(id)))
+            .collect::<Vec<_>>();
         if required.is_empty()
             || evaluate_required_gates(&gates, &required) != GateEligibility::Eligible
         {
@@ -153,6 +158,22 @@ impl FinalizationCoordinator {
         run_id: Option<&EntityId>,
         required_gates: &[String],
     ) -> Result<FinalizationResult, SchedulerError> {
+        let mut worktree = self
+            .store
+            .list_worktrees(&task.project_id)?
+            .into_iter()
+            .find(|candidate| {
+                candidate.task_id == task.id
+                    && run_id.is_some_and(|id| candidate.run_id.as_ref() == Some(id))
+            });
+        let commit = worktree
+            .as_ref()
+            .and_then(|item| item.base_revision.clone());
+        if let Some(snapshot) = worktree.as_mut() {
+            snapshot.status = WorktreeStatus::Committed;
+            snapshot.updated_at = now();
+            self.store.upsert_worktree(snapshot)?;
+        }
         self.store
             .transition_task(&task.id, TaskStatus::Completed)?;
         let receipt = self.store.append_receipt(
@@ -160,10 +181,10 @@ impl FinalizationCoordinator {
             Some(task.id),
             run_id.cloned(),
             "quality_gated_read_review",
-            json!({ "requiredGates": required_gates }),
+            json!({ "requiredGates": required_gates, "commit": commit }),
         )?;
         Ok(FinalizationResult {
-            worktree: None,
+            worktree,
             git: None,
             receipt,
         })

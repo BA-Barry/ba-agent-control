@@ -154,28 +154,37 @@ impl DispatchCoordinator {
         task: &Task,
         run_id: &EntityId,
     ) -> Result<Option<Worktree>, SchedulerError> {
-        if !task.write {
+        if !task.write && task.depends_on.is_empty() {
             return Ok(None);
         }
         let project = self.store.get_project(&task.project_id)?.ok_or_else(|| {
             SchedulerError::NotSchedulable(format!("project {} not found", task.project_id))
         })?;
-        let scope = WriteScope::new(
-            task.path_scope
-                .iter()
-                .map(RepoPath::new)
-                .collect::<Result<Vec<_>, _>>()?,
-        )?;
+        let scope = if task.write {
+            WriteScope::new(
+                task.path_scope
+                    .iter()
+                    .map(RepoPath::new)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?
+        } else {
+            WriteScope::read_only()
+        };
         let manager = WorktreeManager::open(
             &project.root_path,
             self.worktree_root.join(task.project_id.as_str()),
         )?;
+        let revision = crate::revision::dependency_revision(&self.store, task, &manager)?;
         let attempt_name = format!(
             "{}-{}",
             task.id.as_str(),
             &run_id.as_str()[run_id.as_str().len() - 6..]
         );
-        let handle = manager.create_detached(&attempt_name, scope)?;
+        let handle = manager.create_detached_at(
+            &attempt_name,
+            scope,
+            revision.as_deref().unwrap_or("HEAD"),
+        )?;
         let stamp = now();
         let worktree = Worktree {
             id: EntityId::new(),

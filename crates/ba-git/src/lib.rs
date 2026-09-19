@@ -102,6 +102,14 @@ pub struct WriteScope {
 }
 
 impl WriteScope {
+    /// An explicit empty scope for a read-only snapshot; it permits no writes.
+    #[must_use]
+    pub const fn read_only() -> Self {
+        Self {
+            paths: BTreeSet::new(),
+        }
+    }
+
     /// Build a non-empty normalized write scope.
     ///
     /// # Errors
@@ -210,6 +218,19 @@ impl WorktreeManager {
         task_id: &str,
         write_scope: WriteScope,
     ) -> Result<WorktreeHandle, GitError> {
+        self.create_detached_at(task_id, write_scope, "HEAD")
+    }
+
+    /// Create an isolated checkout at the selected existing commit.
+    ///
+    /// # Errors
+    /// Returns an error for invalid revisions, unsafe paths, or Git failures.
+    pub fn create_detached_at(
+        &self,
+        task_id: &str,
+        write_scope: WriteScope,
+        revision: &str,
+    ) -> Result<WorktreeHandle, GitError> {
         let task_segment = safe_ref_segment(task_id)?;
         let path = self.worktree_root.join(task_segment);
         if path.exists() {
@@ -217,8 +238,7 @@ impl WorktreeManager {
         }
         ensure_direct_child(&self.worktree_root, &path)?;
 
-        let revision_output = run_git(&self.repository, ["rev-parse", "HEAD"])?;
-        let base_revision = output_text(&revision_output)?.trim().to_owned();
+        let base_revision = self.resolve_commit(revision)?;
         let args = vec![
             "worktree".to_owned(),
             "add".to_owned(),
@@ -247,6 +267,50 @@ impl WorktreeManager {
             base_revision,
             write_scope,
         })
+    }
+
+    /// Resolve a ref to a commit without interpreting it as an option.
+    ///
+    /// # Errors
+    /// Returns an error if the ref is absent or does not name a commit.
+    pub fn resolve_commit(&self, revision: &str) -> Result<String, GitError> {
+        let output = run_git(
+            &self.repository,
+            [
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{revision}^{{commit}}"),
+            ],
+        )?;
+        Ok(output_text(&output)?.trim().to_owned())
+    }
+
+    /// Check whether an existing commit includes another commit's history.
+    ///
+    /// # Errors
+    /// Returns an error for invalid refs or a failed ancestry query.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, GitError> {
+        let ancestor = self.resolve_commit(ancestor)?;
+        let descendant = self.resolve_commit(descendant)?;
+        let args = vec![
+            "merge-base".into(),
+            "--is-ancestor".into(),
+            ancestor,
+            descendant,
+        ];
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(&self.repository)
+            .output()?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(GitError::CommandFailed {
+                args,
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }),
+        }
     }
 
     /// Verify changed paths, create the task branch, and commit only after gates pass.

@@ -1943,21 +1943,8 @@ fn gate_working_directory(
     run_id: Option<&EntityId>,
     project_root: &FsPath,
 ) -> Result<PathBuf, ApiError> {
-    if !task.write {
-        return Ok(project_root.to_path_buf());
-    }
-    let run_id = run_id.ok_or_else(|| {
-        ApiError::bad_request("write-task quality gates require the originating run_id")
-    })?;
-    let worktree = state
-        .store
-        .list_worktrees(&task.project_id)?
-        .into_iter()
-        .find(|worktree| worktree.task_id == task.id && worktree.run_id.as_ref() == Some(run_id))
-        .ok_or_else(|| ApiError::not_found("worktree for run not found"))?;
-    PathBuf::from(worktree.path)
-        .canonicalize()
-        .map_err(|error| ApiError::internal(format!("worktree is unavailable: {error}")))
+    ba_scheduler::task_execution_directory(&state.store, task, run_id, project_root)
+        .map_err(|error| ApiError::bad_request(error.to_string()))
 }
 
 async fn list_receipts(
