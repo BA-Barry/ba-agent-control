@@ -11,6 +11,15 @@ use serde_json::Value;
 use crate::app::DataPaths;
 
 pub async fn post(paths: &DataPaths, route: &str, body: Value) -> anyhow::Result<Value> {
+    post_with_timeout(paths, route, body, Duration::from_secs(30)).await
+}
+
+pub async fn post_with_timeout(
+    paths: &DataPaths,
+    route: &str,
+    body: Value,
+    read_timeout: Duration,
+) -> anyhow::Result<Value> {
     let descriptor_path = paths.control.clone();
     let route = route.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -27,7 +36,7 @@ pub async fn post(paths: &DataPaths, route: &str, body: Value) -> anyhow::Result
         {
             anyhow::bail!("refusing a non-loopback or mismatched control descriptor");
         }
-        send_post(&descriptor, &route, &body)
+        send_post(&descriptor, &route, &body, read_timeout)
     })
     .await?
 }
@@ -74,14 +83,19 @@ fn send_get(descriptor: &ControlDescriptor, route: &str) -> anyhow::Result<Value
     parse_response(&response)
 }
 
-fn send_post(descriptor: &ControlDescriptor, route: &str, body: &Value) -> anyhow::Result<Value> {
+fn send_post(
+    descriptor: &ControlDescriptor,
+    route: &str,
+    body: &Value,
+    read_timeout: Duration,
+) -> anyhow::Result<Value> {
     if !route.starts_with('/') || route.contains(['\r', '\n']) {
         anyhow::bail!("invalid local API route");
     }
     let body = serde_json::to_vec(body)?;
     let mut stream = TcpStream::connect_timeout(&descriptor.address, Duration::from_secs(2))
         .context("BA Agent control service is not reachable; restart `ba-agent-control ui`")?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(read_timeout))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let request = format!(
         "POST {route} HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nCookie: ba_session={session}\r\nx-ba-csrf-token: {csrf}\r\nContent-Type: application/json\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n",

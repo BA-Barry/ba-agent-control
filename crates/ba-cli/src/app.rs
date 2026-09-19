@@ -648,10 +648,13 @@ pub async fn gate(paths: &DataPaths, command: GateCommand, json: bool) -> anyhow
                 timeout_ms,
             };
             let run_id = run_id.as_deref().map(id_of).transpose()?;
-            let value = crate::local_client::post(
+            let response_timeout = std::time::Duration::from_millis(timeout_ms)
+                .saturating_add(std::time::Duration::from_secs(5));
+            let value = crate::local_client::post_with_timeout(
                 paths,
                 "/api/v1/gates/run",
                 json!({"taskId": task_id, "runId": run_id, "gate": name}),
+                response_timeout,
             )
             .await?;
             emit(&value, json)

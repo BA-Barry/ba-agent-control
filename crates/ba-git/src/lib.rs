@@ -55,8 +55,16 @@ impl RepoPath {
         }
 
         let mut normalized = PathBuf::new();
-        for component in path.components() {
+        let mut components = path.components().peekable();
+        while let Some(component) = components.next() {
             match component {
+                Component::Normal(segment)
+                    if segment == OsStr::new("**") && components.peek().is_none() => {}
+                Component::Normal(segment)
+                    if segment.to_string_lossy().contains(['*', '?', '[', ']']) =>
+                {
+                    return Err(GitError::UnsafePath(path.to_path_buf()));
+                }
                 Component::Normal(segment) => normalized.push(segment),
                 Component::CurDir => {}
                 Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
@@ -624,6 +632,10 @@ mod tests {
         let source = RepoPath::new("src")?;
         let nested = RepoPath::new("src/server/main.rs")?;
         let docs = RepoPath::new("docs")?;
+        let recursive_source = RepoPath::new("src/**")?;
+        assert_eq!(recursive_source, source);
+        assert!(recursive_source.contains(&nested));
+        assert!(RepoPath::new("src/*/main.rs").is_err());
         assert!(paths_overlap(&source, &nested));
         assert!(!paths_overlap(&source, &docs));
         Ok(())

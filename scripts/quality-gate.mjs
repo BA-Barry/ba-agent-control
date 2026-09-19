@@ -14,7 +14,6 @@ const commands = {
   format: [cargo, ["fmt", "--all", "--", "--check"], cargoOptions],
   lint: [cargo, ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], cargoOptions],
   typecheck: ["pnpm", ["typecheck"]],
-  "changed-tests": [cargo, ["test", "--workspace"], cargoOptions],
 };
 
 if (gate === "secret-scan") {
@@ -22,6 +21,9 @@ if (gate === "secret-scan") {
 } else if (gate === "diff-review") {
   run("git", ["diff", "--check"]);
   run("git", ["diff", "--cached", "--check"]);
+} else if (gate === "changed-tests") {
+  run("pnpm", ["--filter", "@ba-agent/console", "build"]);
+  run(cargo, ["test", "--workspace"], cargoOptions);
 } else if (Object.hasOwn(commands, gate)) {
   const [program, args, options] = commands[gate];
   run(program, args, options);
