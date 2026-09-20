@@ -935,6 +935,105 @@ async fn passed_configured_gates_finalize_local_commit_and_receipt()
 }
 
 #[tokio::test]
+async fn passed_configured_gates_finalize_clean_writer_at_its_verified_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    let repository = fixture.directory.path();
+    run_git(repository, &["init", "-b", "main"])?;
+    run_git(
+        repository,
+        &["config", "user.email", "test@example.invalid"],
+    )?;
+    run_git(repository, &["config", "user.name", "BA Agent Test"])?;
+    std::fs::create_dir_all(repository.join("src"))?;
+    std::fs::create_dir_all(repository.join(".ba-agent"))?;
+    std::fs::write(repository.join("src/base.txt"), "base\n")?;
+    std::fs::write(
+        repository.join(".ba-agent/project.toml"),
+        "[gates]\ncheck = [\"git\", \"diff\", \"--check\"]\n",
+    )?;
+    std::fs::write(
+        repository.join(".gitignore"),
+        "state.sqlite3\nstate.sqlite3-*\n",
+    )?;
+    run_git(
+        repository,
+        &["add", ".gitignore", ".ba-agent", "src/base.txt"],
+    )?;
+    run_git(repository, &["commit", "-m", "base"])?;
+    let base_revision = git_output(repository, &["rev-parse", "HEAD"])?;
+
+    let worktrees = tempfile::tempdir()?;
+    let candidate = task(
+        &fixture.project_id,
+        "verification-only writer",
+        true,
+        &["src"],
+    );
+    fixture.store.upsert_task(&candidate)?;
+    let dispatch = DispatchCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf());
+    let mut bundle = dispatch.enqueue(&candidate.id, None)?;
+    bundle.worktree = dispatch.activate_worktree(&candidate, &bundle.run.id)?;
+    let worktree = bundle
+        .worktree
+        .ok_or_else(|| missing("write-task worktree missing"))?;
+    fixture
+        .store
+        .transition_task(&candidate.id, TaskStatus::Running)?;
+    fixture
+        .store
+        .transition_task(&candidate.id, TaskStatus::Review)?;
+    let definition = configured_gate(repository, "check")?;
+    let gate = GateCoordinator::new(fixture.store.clone())
+        .run(
+            &candidate.id,
+            Some(&bundle.run.id),
+            Path::new(&worktree.path),
+            &definition,
+        )
+        .await?;
+    assert_eq!(gate.status, GateStatus::Passed);
+
+    let finalized =
+        FinalizationCoordinator::new(fixture.store.clone(), worktrees.path().to_path_buf())
+            .finalize_if_eligible(&candidate.id, Some(&bundle.run.id))?
+            .ok_or_else(|| missing("eligible clean writer was not finalized"))?;
+    let git = finalized
+        .git
+        .as_ref()
+        .ok_or_else(|| missing("clean writer Git result missing"))?;
+    assert_eq!(git.commit, base_revision);
+    assert!(git.changed_paths.is_empty());
+    assert_eq!(finalized.receipt.kind, "quality_gated_noop_write");
+    assert_eq!(
+        finalized.receipt.payload["commit"].as_str(),
+        Some(base_revision.as_str())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_task(&candidate.id)?
+            .ok_or_else(|| missing("clean writer missing"))?
+            .status,
+        TaskStatus::Completed
+    );
+
+    let mut dependent = task(&fixture.project_id, "downstream", true, &["src"]);
+    dependent.depends_on = vec![candidate.id.clone()];
+    fixture.store.upsert_task(&dependent)?;
+    let downstream = dispatch.enqueue(&dependent.id, None)?;
+    let downstream_worktree = dispatch
+        .activate_worktree(&dependent, &downstream.run.id)?
+        .ok_or_else(|| missing("downstream worktree missing"))?;
+    assert_eq!(
+        downstream_worktree.base_revision.as_deref(),
+        Some(base_revision.as_str())
+    );
+    fixture.store.verify_receipt_chain(&candidate.project_id)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn passed_configured_gates_complete_read_review_with_receipt()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = store_fixture(RunStatus::Running)?;
@@ -1437,6 +1536,20 @@ fn run_git(directory: &std::path::Path, args: &[&str]) -> Result<(), std::io::Er
         .output()?;
     if output.status.success() {
         Ok(())
+    } else {
+        Err(std::io::Error::other(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ))
+    }
+}
+
+fn git_output(directory: &std::path::Path, args: &[&str]) -> Result<String, std::io::Error> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(directory)
+        .output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {
         Err(std::io::Error::other(
             String::from_utf8_lossy(&output.stderr).into_owned(),

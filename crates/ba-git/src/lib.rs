@@ -321,7 +321,9 @@ impl WorktreeManager {
         }
     }
 
-    /// Verify changed paths, create the task branch, and commit only after gates pass.
+    /// Verify changed paths and create the task branch only after gates pass.
+    /// Dirty worktrees are committed; clean worktrees keep the verified base commit
+    /// without manufacturing an empty commit.
     ///
     /// # Errors
     ///
@@ -340,9 +342,6 @@ impl WorktreeManager {
         self.verify_handle_at_base(handle)?;
 
         let detected_paths = changed_paths(&handle.path)?;
-        if detected_paths.is_empty() {
-            return Err(GitError::NoChanges);
-        }
         if let Some(path) = detected_paths
             .iter()
             .find(|path| !handle.write_scope.contains(path))
@@ -359,6 +358,15 @@ impl WorktreeManager {
             &handle.path,
             &["switch".into(), "-c".into(), branch.clone()],
         )?;
+        if detected_paths.is_empty() {
+            let commit_output = run_git(&handle.path, ["rev-parse", "HEAD"])?;
+            let commit = output_text(&commit_output)?.trim().to_owned();
+            return Ok(FinalizedWorktree {
+                branch,
+                commit,
+                changed_paths: detected_paths,
+            });
+        }
         run_git(&handle.path, ["add", "--all", "--", "."])?;
         let staged_paths = changed_paths(&handle.path)?;
         if let Some(path) = staged_paths
@@ -676,6 +684,47 @@ mod tests {
         assert_eq!(branch, finalized.branch);
         manager.remove_clean(&handle)?;
         assert!(!handle.path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn clean_worktree_finalizes_without_manufacturing_an_empty_commit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let repository_dir = tempfile::tempdir()?;
+        let worktrees_dir = tempfile::tempdir()?;
+        git(repository_dir.path(), &["init", "-b", "main"])?;
+        git(
+            repository_dir.path(),
+            &["config", "user.email", "test@example.invalid"],
+        )?;
+        git(
+            repository_dir.path(),
+            &["config", "user.name", "BA Agent Test"],
+        )?;
+        std::fs::create_dir(repository_dir.path().join("src"))?;
+        std::fs::write(repository_dir.path().join("src/base.txt"), "base\n")?;
+        git(repository_dir.path(), &["add", "."])?;
+        git(repository_dir.path(), &["commit", "-m", "base"])?;
+        let base = output_text(&run_git(repository_dir.path(), ["rev-parse", "HEAD"])?)?
+            .trim()
+            .to_owned();
+
+        let manager = WorktreeManager::open(repository_dir.path(), worktrees_dir.path())?;
+        let handle =
+            manager.create_detached("01NOOPTEST", WriteScope::new([RepoPath::new("src")?])?)?;
+        let finalized = manager.finalize(&handle, "alpha", "unused commit message", true)?;
+
+        assert_eq!(finalized.branch, "ba/alpha/01NOOPTEST");
+        assert_eq!(finalized.commit, base);
+        assert!(finalized.changed_paths.is_empty());
+        let commit_count = output_text(&run_git(&handle.path, ["rev-list", "--count", "HEAD"])?)?
+            .trim()
+            .to_owned();
+        assert_eq!(commit_count, "1");
+        assert_eq!(
+            output_text(&run_git(&handle.path, ["branch", "--show-current"])?)?.trim(),
+            finalized.branch
+        );
         Ok(())
     }
 

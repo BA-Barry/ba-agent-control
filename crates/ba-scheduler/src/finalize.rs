@@ -133,11 +133,12 @@ impl FinalizationCoordinator {
         worktree.updated_at = now();
         self.store.upsert_worktree(&worktree)?;
         self.store.transition_task(task_id, TaskStatus::Completed)?;
+        let receipt_kind = write_receipt_kind(&finalized);
         let receipt = self.store.append_receipt(
             &task.project_id,
             Some(task.id),
             run_id.cloned(),
-            "quality_gated_local_commit",
+            receipt_kind,
             json!({
                 "branch": finalized.branch,
                 "commit": finalized.commit,
@@ -188,6 +189,14 @@ impl FinalizationCoordinator {
             git: None,
             receipt,
         })
+    }
+}
+
+fn write_receipt_kind(finalized: &FinalizedWorktree) -> &'static str {
+    if finalized.changed_paths.is_empty() {
+        "quality_gated_noop_write"
+    } else {
+        "quality_gated_local_commit"
     }
 }
 

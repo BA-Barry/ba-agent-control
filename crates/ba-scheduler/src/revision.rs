@@ -36,7 +36,9 @@ pub(crate) fn dependency_revision(
             receipt.task_id.as_ref() == Some(&id)
                 && matches!(
                     receipt.kind.as_str(),
-                    "quality_gated_local_commit" | "quality_gated_read_review"
+                    "quality_gated_local_commit"
+                        | "quality_gated_noop_write"
+                        | "quality_gated_read_review"
                 )
         });
         if let Some(commit) = receipt
