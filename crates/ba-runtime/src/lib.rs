@@ -480,7 +480,8 @@ impl CodexAdapter {
         let active_turn = turn_response
             .pointer("/result/turn/id")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+            .ok_or_else(|| RuntimeError::Protocol("turn response did not contain an id".into()))?
+            .to_owned();
 
         let (sender, receiver) = mpsc::channel(64);
         let adapter = self.clone();
@@ -725,7 +726,7 @@ async fn run_app_server_session(
     adapter: CodexAdapter,
     run_id: String,
     thread_id: String,
-    mut active_turn: Option<String>,
+    active_turn: String,
     mut child: Child,
     mut stdin: tokio::process::ChildStdin,
     mut lines: Lines<BufReader<ChildStdout>>,
@@ -734,11 +735,15 @@ async fn run_app_server_session(
 ) {
     let mut request_id = 10_u64;
     let mut pending_approvals = HashMap::<String, PendingApproval>::new();
+    let expected_turn_id = active_turn.clone();
+    let mut active_turn = Some(active_turn);
     let mut terminal_emitted = false;
     for message in buffered_messages {
         terminal_emitted = handle_app_server_message(
             &adapter,
             &run_id,
+            &thread_id,
+            &expected_turn_id,
             message,
             &mut active_turn,
             &mut pending_approvals,
@@ -756,6 +761,8 @@ async fn run_app_server_session(
                             terminal_emitted = handle_app_server_message(
                                 &adapter,
                                 &run_id,
+                                &thread_id,
+                                &expected_turn_id,
                                 message,
                                 &mut active_turn,
                                 &mut pending_approvals,
@@ -842,6 +849,8 @@ async fn run_app_server_session(
 fn handle_app_server_message(
     adapter: &CodexAdapter,
     run_id: &str,
+    expected_thread_id: &str,
+    expected_turn_id: &str,
     message: Value,
     active_turn: &mut Option<String>,
     pending_approvals: &mut HashMap<String, PendingApproval>,
@@ -851,12 +860,12 @@ fn handle_app_server_message(
         .and_then(Value::as_str)
         .unwrap_or("protocol/message")
         .to_owned();
-    let terminal = method == "turn/completed";
-    if method == "turn/started" {
-        *active_turn = message
-            .pointer("/params/turn/id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+    let own_turn = message.pointer("/params/threadId").and_then(Value::as_str)
+        == Some(expected_thread_id)
+        && message.pointer("/params/turn/id").and_then(Value::as_str) == Some(expected_turn_id);
+    let terminal = method == "turn/completed" && own_turn;
+    if method == "turn/started" && own_turn {
+        *active_turn = Some(expected_turn_id.to_owned());
     } else if terminal {
         *active_turn = None;
         let lifecycle = app_server_completion_name(&message);
@@ -1562,6 +1571,8 @@ mod tests {
         assert!(!handle_app_server_message(
             &adapter,
             "run-fixture",
+            "thread-fixture",
+            "turn-fixture",
             json!({
                 "jsonrpc": "2.0",
                 "id": "approval-fixture",
@@ -1580,9 +1591,90 @@ mod tests {
         assert!(handle_app_server_message(
             &adapter,
             "run-fixture",
+            "thread-fixture",
+            "turn-fixture",
             json!({
                 "method": "turn/completed",
-                "params": {"turn": {"id": "turn-fixture", "status": "completed"}}
+                "params": {"threadId": "thread-fixture", "turn": {"id": "turn-fixture", "status": "completed"}}
+            }),
+            &mut active_turn,
+            &mut approvals,
+        ));
+        assert!(active_turn.is_none());
+        assert_eq!(
+            receiver.try_recv().map(|event| event.name),
+            Ok("succeeded".into())
+        );
+    }
+
+    #[test]
+    fn subagent_turns_do_not_complete_or_replace_the_parent_turn() {
+        let adapter = CodexAdapter::new("codex");
+        let mut receiver = adapter.subscribe();
+        let mut active_turn = Some("parent-turn".into());
+        let mut approvals = HashMap::new();
+
+        for message in [
+            json!({
+                "method": "turn/started",
+                "params": {"threadId": "child-thread", "turn": {"id": "child-turn"}}
+            }),
+            json!({
+                "method": "turn/completed",
+                "params": {"threadId": "child-thread", "turn": {"id": "child-turn", "status": "completed"}}
+            }),
+            json!({
+                "method": "turn/completed",
+                "params": {"threadId": "child-thread", "turn": {"id": "parent-turn", "status": "completed"}}
+            }),
+            json!({
+                "method": "turn/completed",
+                "params": {"threadId": "parent-thread", "turn": {"id": "other-turn", "status": "completed"}}
+            }),
+        ] {
+            assert!(!handle_app_server_message(
+                &adapter,
+                "run-fixture",
+                "parent-thread",
+                "parent-turn",
+                message,
+                &mut active_turn,
+                &mut approvals,
+            ));
+            assert_eq!(active_turn.as_deref(), Some("parent-turn"));
+            assert_eq!(
+                receiver.try_recv().map(|event| event.kind),
+                Ok(RuntimeEventKind::Protocol)
+            );
+        }
+
+        assert!(!handle_app_server_message(
+            &adapter,
+            "run-fixture",
+            "parent-thread",
+            "parent-turn",
+            json!({
+                "id": "child-approval",
+                "method": "item/commandExecution/requestApproval",
+                "params": {"threadId": "child-thread", "command": ["cargo", "test"]}
+            }),
+            &mut active_turn,
+            &mut approvals,
+        ));
+        assert!(approvals.contains_key("child-approval"));
+        assert_eq!(
+            receiver.try_recv().map(|event| event.kind),
+            Ok(RuntimeEventKind::ApprovalRequested)
+        );
+
+        assert!(handle_app_server_message(
+            &adapter,
+            "run-fixture",
+            "parent-thread",
+            "parent-turn",
+            json!({
+                "method": "turn/completed",
+                "params": {"threadId": "parent-thread", "turn": {"id": "parent-turn", "status": "completed"}}
             }),
             &mut active_turn,
             &mut approvals,
