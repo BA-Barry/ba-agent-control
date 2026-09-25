@@ -1012,6 +1012,9 @@ async fn decide_review_repair_loop(
 fn review_repair_error(error: SchedulerError) -> ApiError {
     match error {
         SchedulerError::ReviewRepairLoopNotFound(_) => ApiError::not_found(error.to_string()),
+        SchedulerError::Store(StoreError::ConcurrentReviewRepairLoop(_)) => {
+            ApiError::conflict(error.to_string())
+        }
         SchedulerError::Store(_) => ApiError::internal(error),
         _ => ApiError::bad_request(error.to_string()),
     }
@@ -2910,6 +2913,15 @@ mod tests {
         assert_eq!(incoming.len(), 1);
         assert_eq!(incoming[0].handoff.id, created.handoff.id);
         Ok(())
+    }
+
+    #[test]
+    fn review_repair_concurrent_decision_returns_conflict() {
+        let error = review_repair_error(SchedulerError::Store(
+            StoreError::ConcurrentReviewRepairLoop(EntityId::new()),
+        ));
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "conflict");
     }
 
     #[tokio::test]

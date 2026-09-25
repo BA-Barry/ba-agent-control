@@ -196,16 +196,6 @@ impl SqliteStore {
         delete_by_id(&self.connection.lock(), "workstreams", id)
     }
 
-    pub fn upsert_review_repair_loop(&self, item: &ReviewRepairLoop) -> Result<(), StoreError> {
-        let data = json(item)?;
-        self.connection.lock().execute(
-            "INSERT INTO review_repair_loops(id,project_id,workstream_id,status,updated_at,data) VALUES (?1,?2,?3,?4,?5,?6) \
-             ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,workstream_id=excluded.workstream_id,status=excluded.status,updated_at=excluded.updated_at,data=excluded.data",
-            params![item.id.as_str(), item.project_id.as_str(), item.workstream_id.as_str(), item.status.as_str(), timestamp(item.updated_at), data],
-        )?;
-        Ok(())
-    }
-
     pub fn get_review_repair_loop(
         &self,
         id: &EntityId,
@@ -287,14 +277,49 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Add one generated loop stage and update the loop record atomically.
+    /// Update the observed loop stage and insert its generated tasks atomically.
+    ///
+    /// A decision or refresh based on an obsolete stage must not overwrite a
+    /// newer one. The review task ID distinguishes successive repair rounds even
+    /// when their status is the same. Conflicts leave no generated tasks behind.
     pub fn advance_review_repair_loop(
         &self,
+        expected: &ReviewRepairLoop,
         loop_record: &ReviewRepairLoop,
         tasks: &[Task],
     ) -> Result<(), StoreError> {
+        if loop_record.id != expected.id
+            || loop_record.project_id != expected.project_id
+            || loop_record.workstream_id != expected.workstream_id
+        {
+            return Err(StoreError::InvalidEntityLink(
+                "advancing a review/repair loop must preserve its identity",
+            ));
+        }
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE review_repair_loops SET status=?1,updated_at=?2,data=?3 \
+             WHERE id=?4 AND status=?5 \
+             AND json_extract(data, '$.active_review_task_id')=?6 \
+             AND COALESCE(json_extract(data, '$.repairs_started'), 0)=?7 \
+             AND json_extract(data, '$.max_repairs')=?8 \
+             AND json_extract(data, '$.confirmation_task_id') IS ?9",
+            params![
+                loop_record.status.as_str(),
+                timestamp(loop_record.updated_at),
+                json(loop_record)?,
+                expected.id.as_str(),
+                expected.status.as_str(),
+                expected.active_review_task_id.as_str(),
+                expected.repairs_started,
+                expected.max_repairs,
+                optional_id(expected.confirmation_task_id.as_ref())
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::ConcurrentReviewRepairLoop(expected.id.clone()));
+        }
         for task in tasks {
             if task.project_id != loop_record.project_id
                 || task.workstream_id.as_ref() != Some(&loop_record.workstream_id)
@@ -308,15 +333,6 @@ impl SqliteStore {
                 params![task.id.as_str(),task.project_id.as_str(),optional_id(task.workstream_id.as_ref()),optional_id(task.milestone_id.as_ref()),optional_id(task.agent_profile_id.as_ref()),task.status.as_str(),timestamp(task.updated_at),json(task)?],
             )?;
         }
-        transaction.execute(
-            "UPDATE review_repair_loops SET status=?1,updated_at=?2,data=?3 WHERE id=?4",
-            params![
-                loop_record.status.as_str(),
-                timestamp(loop_record.updated_at),
-                json(loop_record)?,
-                loop_record.id.as_str()
-            ],
-        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -1732,6 +1748,8 @@ pub enum StoreError {
     InvalidQueueOrder,
     #[error("task {0} disposition changed concurrently; reload and retry")]
     ConcurrentTaskDisposition(EntityId),
+    #[error("review/repair loop {0} changed concurrently; reload before making a new decision")]
+    ConcurrentReviewRepairLoop(EntityId),
     #[error("task {0} is archived or superseded; restore it before mutation")]
     TaskInactive(EntityId),
 }

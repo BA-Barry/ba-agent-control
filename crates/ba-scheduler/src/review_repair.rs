@@ -187,13 +187,33 @@ impl ReviewRepairLoopService {
         id: &EntityId,
         request: &ReviewRepairLoopDecisionRequest,
     ) -> Result<ReviewRepairLoop, SchedulerError> {
-        let mut loop_record = self.get(id)?;
+        let loop_record = self
+            .store
+            .get_review_repair_loop(id)?
+            .ok_or_else(|| SchedulerError::ReviewRepairLoopNotFound(id.to_string()))?;
+        self.decide_review(loop_record, request)
+    }
+
+    fn decide_review(
+        &self,
+        loop_record: ReviewRepairLoop,
+        request: &ReviewRepairLoopDecisionRequest,
+    ) -> Result<ReviewRepairLoop, SchedulerError> {
+        let review_task_id = loop_record.active_review_task_id.clone();
+        let mut loop_record = self.refresh(loop_record)?;
+        // Refresh may reread after a race, but this decision belongs only to the
+        // review observed when the request began.
+        if loop_record.active_review_task_id != review_task_id {
+            return Err(ba_store::StoreError::ConcurrentReviewRepairLoop(loop_record.id).into());
+        }
         if loop_record.status != ReviewRepairLoopStatus::AwaitingDecision {
             return Err(SchedulerError::InvalidReviewRepairLoop(format!(
-                "loop {id} is {}, not awaiting a review decision",
+                "loop {} is {}, not awaiting a review decision",
+                loop_record.id,
                 loop_record.status.as_str()
             )));
         }
+        let expected = loop_record.clone();
         let note = required_decision_note(&request.note)?;
         let stamp = now();
         let decision = match request.action {
@@ -209,14 +229,18 @@ impl ReviewRepairLoopService {
         });
         loop_record.updated_at = stamp;
 
-        match request.action {
+        let tasks = match request.action {
             ReviewRepairAction::Accept => self.accept_review(&mut loop_record, &note, stamp)?,
             ReviewRepairAction::Repair => self.request_repair(&mut loop_record, &note, stamp)?,
             ReviewRepairAction::Block => {
                 loop_record.status = ReviewRepairLoopStatus::Blocked;
-                self.store.upsert_review_repair_loop(&loop_record)?;
+                Vec::new()
             }
-        }
+        };
+        // Commit this decision only for the observed review. Never retry a
+        // conflict: a later round needs a new explicit user decision.
+        self.store
+            .advance_review_repair_loop(&expected, &loop_record, &tasks)?;
         Ok(loop_record)
     }
 
@@ -225,7 +249,7 @@ impl ReviewRepairLoopService {
         loop_record: &mut ReviewRepairLoop,
         note: &str,
         stamp: ba_core::Timestamp,
-    ) -> Result<(), SchedulerError> {
+    ) -> Result<Vec<Task>, SchedulerError> {
         let project = self.project(&loop_record.project_id)?;
         let profile_records = self.store.list_agent_profiles()?;
         let profiles = profiles_by_role(&profile_records);
@@ -245,9 +269,7 @@ impl ReviewRepairLoopService {
         );
         loop_record.status = ReviewRepairLoopStatus::Confirming;
         loop_record.confirmation_task_id = Some(confirmation.id.clone());
-        self.store
-            .advance_review_repair_loop(loop_record, &[confirmation])
-            .map_err(Into::into)
+        Ok(vec![confirmation])
     }
 
     fn request_repair(
@@ -255,11 +277,10 @@ impl ReviewRepairLoopService {
         loop_record: &mut ReviewRepairLoop,
         note: &str,
         stamp: ba_core::Timestamp,
-    ) -> Result<(), SchedulerError> {
+    ) -> Result<Vec<Task>, SchedulerError> {
         if loop_record.repairs_started >= loop_record.max_repairs {
             loop_record.status = ReviewRepairLoopStatus::Exhausted;
-            self.store.upsert_review_repair_loop(loop_record)?;
-            return Ok(());
+            return Ok(Vec::new());
         }
         let project = self.project(&loop_record.project_id)?;
         let workstream = self.workstream(&loop_record.workstream_id)?;
@@ -317,9 +338,7 @@ impl ReviewRepairLoopService {
         loop_record.repairs_started = iteration;
         loop_record.status = ReviewRepairLoopStatus::Running;
         loop_record.active_review_task_id = review_id;
-        self.store
-            .advance_review_repair_loop(loop_record, &tasks)
-            .map_err(Into::into)
+        Ok(tasks)
     }
 
     fn refresh(
@@ -362,9 +381,19 @@ impl ReviewRepairLoopService {
             _ => None,
         };
         if let Some(status) = next_status {
+            let expected = loop_record.clone();
             loop_record.status = status;
             loop_record.updated_at = now();
-            self.store.upsert_review_repair_loop(&loop_record)?;
+            match self
+                .store
+                .advance_review_repair_loop(&expected, &loop_record, &[])
+            {
+                Ok(()) => {}
+                Err(ba_store::StoreError::ConcurrentReviewRepairLoop(_)) => {
+                    return self.get(&loop_record.id);
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         Ok(loop_record)
     }
@@ -579,6 +608,10 @@ fn confirmation_description(objective: &str, note: &str, english: bool) -> Strin
 }
 
 #[cfg(test)]
+#[path = "review_repair_tests.rs"]
+mod concurrency_tests;
+
+#[cfg(test)]
 mod tests {
     use ba_core::{Project, TaskStatus, now};
     use ba_store::SqliteStore;
@@ -589,7 +622,7 @@ mod tests {
     };
     use crate::ensure_builtin_agent_profiles;
 
-    fn complete_task(
+    pub(super) fn complete_task(
         store: &SqliteStore,
         id: &ba_core::EntityId,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -604,7 +637,8 @@ mod tests {
         Ok(())
     }
 
-    fn fixture() -> Result<(tempfile::TempDir, SqliteStore, Project), Box<dyn std::error::Error>> {
+    pub(super) fn fixture()
+    -> Result<(tempfile::TempDir, SqliteStore, Project), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = SqliteStore::open(directory.path().join("state.sqlite3"))?;
         ensure_builtin_agent_profiles(&store)?;
