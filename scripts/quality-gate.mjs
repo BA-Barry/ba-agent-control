@@ -4,9 +4,10 @@ import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const gate = process.argv[2];
+const cargoHome = process.env.CARGO_HOME || join(homedir(), ".cargo");
 const cargo = resolveExecutable(
   process.env.CARGO,
-  join(homedir(), ".cargo", "bin", process.platform === "win32" ? "cargo.exe" : "cargo"),
+  join(cargoHome, "bin", process.platform === "win32" ? "cargo.exe" : "cargo"),
   "cargo",
 );
 const cargoOptions = preferredCargoOptions();
@@ -60,7 +61,7 @@ function preferredCargoOptions() {
   if (process.platform !== "win32") return {};
   const rustup = resolveExecutable(
     process.env.RUSTUP,
-    join(homedir(), ".cargo", "bin", "rustup.exe"),
+    join(cargoHome, "bin", "rustup.exe"),
     "rustup",
   );
   const list = spawnSync(rustup, ["toolchain", "list"], {

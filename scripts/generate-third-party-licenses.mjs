@@ -9,8 +9,9 @@ const noticesOutput = resolve(process.argv[3] ?? "THIRD_PARTY_NOTICES.txt");
 const licenseOverrides = new Map([
   ["npm:react-remove-scroll-bar@2.3.8", resolve("third_party/licenses/react-remove-scroll-bar-2.3.8-LICENSE")],
 ]);
+const cargoHome = process.env.CARGO_HOME || join(homedir(), ".cargo");
 const cargo = process.env.CARGO
-  ?? resolve(homedir(), ".cargo", "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
+  ?? resolve(cargoHome, "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
 const releaseTargets = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",

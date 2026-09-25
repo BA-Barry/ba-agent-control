@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -39,12 +40,28 @@ pub struct DataPaths {
 
 impl DataPaths {
     pub fn resolve(override_root: Option<PathBuf>) -> anyhow::Result<Self> {
+        Self::resolve_with_env(override_root, std::env::var_os("BA_AGENT_DATA_DIR"))
+    }
+
+    fn resolve_with_env(
+        override_root: Option<PathBuf>,
+        environment_root: Option<OsString>,
+    ) -> anyhow::Result<Self> {
         let root = match override_root {
             Some(path) => path,
-            None => ProjectDirs::from("dev", "BA Agent", "ba-agent-control")
-                .context("unable to resolve the operating-system data directory")?
-                .data_local_dir()
-                .to_path_buf(),
+            None => match environment_root.filter(|value| !value.is_empty()) {
+                Some(value) => {
+                    let path = PathBuf::from(value);
+                    if !path.is_absolute() {
+                        bail!("BA_AGENT_DATA_DIR must be an absolute path");
+                    }
+                    path
+                }
+                None => ProjectDirs::from("dev", "BA Agent", "ba-agent-control")
+                    .context("unable to resolve the operating-system data directory")?
+                    .data_local_dir()
+                    .to_path_buf(),
+            },
         };
         fs::create_dir_all(&root)?;
         let worktrees = root.join("worktrees");
@@ -786,6 +803,41 @@ pub fn emit<T: Serialize>(value: &T, json_output: bool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_data_directory_overrides_environment() -> anyhow::Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let explicit = temporary.path().join("explicit");
+        let paths = DataPaths::resolve_with_env(
+            Some(explicit.clone()),
+            Some(OsString::from("relative-environment")),
+        )?;
+
+        assert_eq!(paths.root, explicit);
+        assert!(paths.worktrees.is_dir());
+        assert!(paths.logs.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn environment_data_directory_is_used_without_explicit_override() -> anyhow::Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let environment = temporary.path().join("environment");
+        let paths = DataPaths::resolve_with_env(None, Some(environment.clone().into_os_string()))?;
+
+        assert_eq!(paths.root, environment);
+        assert_eq!(paths.database, environment.join("ba-agent.db"));
+        assert_eq!(paths.control, environment.join("control.json"));
+        Ok(())
+    }
+
+    #[test]
+    fn relative_environment_data_directory_is_rejected() {
+        assert!(matches!(
+            DataPaths::resolve_with_env(None, Some(OsString::from("relative-data"))),
+            Err(error) if error.to_string().contains("BA_AGENT_DATA_DIR must be an absolute path")
+        ));
+    }
 
     #[test]
     fn configured_gate_name_cannot_be_paired_with_a_different_command() {

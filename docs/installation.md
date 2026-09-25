@@ -32,6 +32,32 @@ BA Agent reuses the Codex CLI session and never stores model credentials. Instal
 
 On macOS, use `shasum -a 256` when `sha256sum` is unavailable. Replace the archive label with `macos-x64` or `macos-arm64` as appropriate.
 
+## Custom data and toolchain paths on Windows
+
+`BA_AGENT_DATA_DIR` selects the BA Agent database, logs, control descriptor, and worktree root. It must be an absolute path; the global CLI option `--data-dir PATH` takes precedence for one invocation. For a G-drive installation, after the existing data and Rust toolchain directories have been copied and verified, configure the current PowerShell session and future user sessions:
+
+```powershell
+$env:BA_AGENT_DATA_DIR = 'G:\BA Agent Data\ba-agent-control\data'
+$env:CARGO_HOME = 'G:\DevTools\cargo'
+$env:RUSTUP_HOME = 'G:\DevTools\rustup'
+[Environment]::SetEnvironmentVariable('BA_AGENT_DATA_DIR', $env:BA_AGENT_DATA_DIR, 'User')
+[Environment]::SetEnvironmentVariable('CARGO_HOME', $env:CARGO_HOME, 'User')
+[Environment]::SetEnvironmentVariable('RUSTUP_HOME', $env:RUSTUP_HOME, 'User')
+pnpm config set store-dir 'G:\.pnpm-store' --location=global
+```
+
+Add `G:\DevTools\cargo\bin` ahead of the old Cargo bin directory in your user `PATH`, then open a new terminal. BA Agent's quality-gate and license-inventory scripts honor `CARGO_HOME`. Check the effective paths before resuming work:
+
+```powershell
+ba-agent-control doctor --json
+Get-Command cargo
+cargo --version
+rustup show active-toolchain
+pnpm store path
+```
+
+Environment configuration does **not** copy SQLite, logs, or worktrees, and does not rewrite absolute paths already stored in Git worktree metadata or BA Agent records. Stop the local service before copying its data directory; keep the previous location or a validated compatibility link until database integrity, receipts, and any active worktrees have been checked at the new location. Do not delete the original data merely because `doctor` reports the new `dataDirectory`.
+
 ## Data retention
 
 The default database, logs, and worktrees stay under the platform application-data directory reported by `ba-agent-control --json doctor`. Upgrade, rollback, and uninstall only manipulate the installed binary and its one previous-version sibling. To remove runtime data, first inspect the exact `dataDirectory` returned by `doctor`, stop BA Agent, back up permanent receipts, and remove that explicit directory manually; no bundled script performs this destructive step.
