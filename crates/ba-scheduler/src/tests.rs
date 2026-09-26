@@ -1653,6 +1653,59 @@ fn rejection_ends_run_and_cancels_sibling_approvals() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn concurrent_approval_resolution_has_one_durable_winner() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = store_fixture(RunStatus::Running)?;
+    let approval = ApprovalCoordinator::new(fixture.store.clone())
+        .request_git_operation(&fixture.run_id, GitOperation::Push, &json!({}))?
+        .ok_or_else(|| missing("approval missing"))?;
+    let database = fixture.directory.path().join("state.sqlite3");
+    let second_store = SqliteStore::open(database)?;
+    let first_id = approval.id.clone();
+    let second_id = approval.id.clone();
+    let first = std::thread::spawn(move || {
+        ApprovalCoordinator::new(fixture.store)
+            .resolve(
+                &first_id,
+                ApprovalResolution::Approve,
+                &json!({"writer": "first"}),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    });
+    let second = std::thread::spawn(move || {
+        ApprovalCoordinator::new(second_store)
+            .resolve(
+                &second_id,
+                ApprovalResolution::Approve,
+                &json!({"writer": "second"}),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    });
+    let first_result = first
+        .join()
+        .map_err(|_| missing("first approval writer panicked"))?;
+    let second_result = second
+        .join()
+        .map_err(|_| missing("second approval writer panicked"))?;
+    assert_ne!(first_result.is_ok(), second_result.is_ok());
+    assert!(
+        first_result
+            .as_ref()
+            .err()
+            .is_none_or(|error| error.contains("already resolved"))
+    );
+    assert!(
+        second_result
+            .as_ref()
+            .err()
+            .is_none_or(|error| error.contains("already resolved"))
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_rejection_resumes_after_the_last_pending_approval()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = store_fixture(RunStatus::Running)?;

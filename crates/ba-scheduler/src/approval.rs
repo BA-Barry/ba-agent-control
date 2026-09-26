@@ -215,7 +215,11 @@ impl ApprovalCoordinator {
             "evidence": evidence,
         }));
         approval.decided_at = Some(now());
-        self.store.upsert_approval(&approval)?;
+        if !self.store.update_approval_if_pending(&approval)? {
+            return Err(SchedulerError::ApprovalAlreadyResolved(
+                approval_id.to_string(),
+            ));
+        }
 
         if terminate_on_rejection
             && matches!(

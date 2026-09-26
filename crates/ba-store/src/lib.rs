@@ -1141,6 +1141,20 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Replace a pending approval exactly once.
+    ///
+    /// The conditional update is the durable compare-and-swap boundary used by
+    /// concurrent HTTP, CLI, and MCP approval responders. A caller that loses
+    /// the race receives `false` and must not apply the decision side effects.
+    pub fn update_approval_if_pending(&self, item: &Approval) -> Result<bool, StoreError> {
+        let data = json(item)?;
+        let changed = self.connection.lock().execute(
+            "UPDATE approvals SET status=?1,data=?2 WHERE id=?3 AND status='pending'",
+            params![item.status.as_str(), data, item.id.as_str()],
+        )?;
+        Ok(changed == 1)
+    }
+
     pub fn list_approvals(&self, run_id: &EntityId) -> Result<Vec<Approval>, StoreError> {
         list_json(
             &self.connection.lock(),
