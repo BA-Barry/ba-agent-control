@@ -1,4 +1,4 @@
-use std::{fs, path::Path, time::Duration};
+use std::{fs, path::Path, thread, time::Duration};
 
 use ba_core::{
     Artifact, Dispatch, EntityId, Milestone, Project, ReceiptChainError, Run, RunStatus, Task,
@@ -266,6 +266,64 @@ fn run_events_are_append_only_and_strictly_ordered() -> Result<(), Box<dyn std::
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
         vec![1, 2]
+    );
+    Ok(())
+}
+
+#[test]
+fn run_events_are_ordered_across_independent_sqlite_connections()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (temp, store) = open_temp()?;
+    let project = project();
+    let task = task(project.id.clone());
+    let run = run(task.id.clone());
+    store.upsert_project(&project)?;
+    store.upsert_task(&task)?;
+    store.upsert_run(&run)?;
+
+    // Separate SqliteStore handles model the service and a concurrent CLI/MCP
+    // process. Both must be able to append without colliding on the sequence
+    // primary key.
+    let database = temp.path().join("ba-agent.sqlite3");
+    let first = SqliteStore::open(&database)?;
+    let second = SqliteStore::open(&database)?;
+    let first_run = run.id.clone();
+    let second_run = run.id.clone();
+    let first_thread = thread::spawn(move || {
+        (0..8)
+            .map(|index| {
+                first
+                    .append_run_event(&first_run, format!("first.{index}"), json!({}))
+                    .map(|event| event.sequence)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()
+    });
+    let second_thread = thread::spawn(move || {
+        (0..8)
+            .map(|index| {
+                second
+                    .append_run_event(&second_run, format!("second.{index}"), json!({}))
+                    .map(|event| event.sequence)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()
+    });
+    first_thread
+        .join()
+        .map_err(|_| std::io::Error::other("first event writer panicked"))??;
+    second_thread
+        .join()
+        .map_err(|_| std::io::Error::other("second event writer panicked"))??;
+
+    let events = store.list_run_events(&run.id, 0)?;
+    assert_eq!(events.len(), 16);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        (1..=16).collect::<Vec<_>>()
     );
     Ok(())
 }

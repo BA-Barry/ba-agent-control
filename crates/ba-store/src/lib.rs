@@ -1425,7 +1425,11 @@ impl SqliteStore {
         payload: Value,
     ) -> Result<RunEvent, StoreError> {
         let mut connection = self.connection.lock();
-        let transaction = connection.transaction()?;
+        // Claims the SQLite write lock before reading MAX(sequence). With two
+        // BA Agent processes writing the same run, a deferred transaction could
+        // let both connections observe the same next sequence and make one
+        // append fail on the (run_id, sequence) primary key.
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let sequence: u64 = transaction.query_row(
             "SELECT COALESCE(MAX(sequence),0)+1 FROM run_events WHERE run_id=?1",
             params![run_id.as_str()],
