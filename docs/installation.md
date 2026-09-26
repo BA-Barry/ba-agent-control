@@ -58,6 +58,8 @@ pnpm store path
 
 Environment configuration does **not** copy SQLite, logs, or worktrees, and does not rewrite absolute paths already stored in Git worktree metadata or BA Agent records. Stop the local service before copying its data directory; keep the previous location or a validated compatibility link until database integrity, receipts, and any active worktrees have been checked at the new location. Do not delete the original data merely because `doctor` reports the new `dataDirectory`.
 
+For a complete, reproducible Windows relocation with `robocopy`, database hashes, worktree checks, restart verification, toolchain cache migration, and rollback boundaries, follow [Windows local data migration](data-migration-windows.md). The runbook is copy-and-verify only and never removes the source directory.
+
 ## Data retention
 
 The default database, logs, and worktrees stay under the platform application-data directory reported by `ba-agent-control --json doctor`. Upgrade, rollback, and uninstall only manipulate the installed binary and its one previous-version sibling. To remove runtime data, first inspect the exact `dataDirectory` returned by `doctor`, stop BA Agent, back up permanent receipts, and remove that explicit directory manually; no bundled script performs this destructive step.

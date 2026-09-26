@@ -175,7 +175,7 @@ ba-agent-control task add <PROJECT_ID> "修复登录状态机" --write --scope "
 - Codex/Claude 模型凭据：BA Agent 不保存；
 - 详细运行日志：默认保留 90 天；质量收据永久保留。
 
-可用绝对路径环境变量 `BA_AGENT_DATA_DIR` 指定全局数据目录；单次命令的 `--data-dir PATH` 优先于环境变量。Windows 上例如将其设为 `G:\BA Agent Data\ba-agent-control\data`，并用 `ba-agent-control doctor --json` 核对 `dataDirectory`。Rust 工具链迁到 G 盘时，还需设置 `CARGO_HOME=G:\DevTools\cargo`、`RUSTUP_HOME=G:\DevTools\rustup`，并让 `G:\DevTools\cargo\bin` 优先出现在 `PATH`。设置变量**不会自动搬迁**数据库或修正历史 worktree 的绝对路径；已有数据须先停服务、完整复制与验证，确认旧路径引用已妥善处理后才能清理 C 盘副本。具体命令和检查见[安装与回滚说明](installation.md#custom-data-and-toolchain-paths-on-windows)。
+可用绝对路径环境变量 `BA_AGENT_DATA_DIR` 指定全局数据目录；单次命令的 `--data-dir PATH` 优先于环境变量。Windows 上例如将其设为 `G:\BA Agent Data\ba-agent-control\data`，并用 `ba-agent-control doctor --json` 核对 `dataDirectory`。Rust 工具链迁到 G 盘时，还需设置 `CARGO_HOME=G:\DevTools\cargo`、`RUSTUP_HOME=G:\DevTools\rustup`，并让 `G:\DevTools\cargo\bin` 优先出现在 `PATH`。设置变量**不会自动搬迁**数据库或修正历史 worktree 的绝对路径；已有数据须先停服务、完整复制与验证，确认旧路径引用已妥善处理后才能清理 C 盘副本。具体命令和检查见[安装与回滚说明](installation.md#custom-data-and-toolchain-paths-on-windows)及[Windows 本地数据迁移手册](data-migration-windows.md)。
 
 ## 当前边界
 

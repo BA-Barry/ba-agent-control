@@ -78,7 +78,7 @@ python plugins/personal-marketplace/plugins/ba-agent-control/scripts/validate_bu
 python plugins/personal-marketplace/plugins/ba-agent-control/scripts/test_hook_guard.py
 ```
 
-See [中文使用说明](docs/usage.zh-CN.md), [Architecture](docs/architecture.md), [Product backlog](docs/product-backlog.md), [Completion audit](docs/completion-audit.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
+See [中文使用说明](docs/usage.zh-CN.md), [Architecture](docs/architecture.md), [Product backlog](docs/product-backlog.md), [Completion audit](docs/completion-audit.md), [Runtime compatibility](docs/runtime-compatibility.md), [Self-hosting evidence](docs/self-hosting.md), [Install and rollback](docs/installation.md), [Windows data migration](docs/data-migration-windows.md), [Release candidates](docs/release.md), [GitHub adapter](docs/github-adapter.md), [Performance evidence](docs/performance.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
 ## License
 
