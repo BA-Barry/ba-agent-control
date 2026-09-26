@@ -199,6 +199,23 @@ impl ReviewRepairLoopService {
         loop_record: ReviewRepairLoop,
         request: &ReviewRepairLoopDecisionRequest,
     ) -> Result<ReviewRepairLoop, SchedulerError> {
+        // A caller may have captured this snapshot before another request
+        // advanced the loop. Refreshing first would turn that race into a
+        // misleading "not awaiting" validation error (HTTP 400). Check the
+        // optimistic-concurrency fields before refreshing so stale decisions
+        // consistently surface as a conflict (HTTP 409).
+        let current = self
+            .store
+            .get_review_repair_loop(&loop_record.id)?
+            .ok_or_else(|| SchedulerError::ReviewRepairLoopNotFound(loop_record.id.to_string()))?;
+        if current.status != loop_record.status
+            || current.active_review_task_id != loop_record.active_review_task_id
+            || current.repairs_started != loop_record.repairs_started
+            || current.max_repairs != loop_record.max_repairs
+            || current.confirmation_task_id != loop_record.confirmation_task_id
+        {
+            return Err(ba_store::StoreError::ConcurrentReviewRepairLoop(loop_record.id).into());
+        }
         let review_task_id = loop_record.active_review_task_id.clone();
         let mut loop_record = self.refresh(loop_record)?;
         // Refresh may reread after a race, but this decision belongs only to the

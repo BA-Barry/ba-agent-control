@@ -219,6 +219,62 @@ fn stale_refresh_and_decision_cannot_overwrite_or_decide_a_later_review()
 }
 
 #[test]
+fn stale_running_decisions_report_conflict_when_the_winner_keeps_the_review()
+-> Result<(), Box<dyn Error>> {
+    let mut unexpected_results = Vec::new();
+    for (winning_action, expected_status) in [
+        (
+            ReviewRepairAction::Accept,
+            ReviewRepairLoopStatus::Confirming,
+        ),
+        (ReviewRepairAction::Block, ReviewRepairLoopStatus::Blocked),
+        (
+            ReviewRepairAction::Repair,
+            ReviewRepairLoopStatus::Exhausted,
+        ),
+    ] {
+        let (_directory, store, project) = fixture()?;
+        let service = ReviewRepairLoopService::new(store.clone());
+        let created = start(&service, &project)?;
+        let active = if winning_action == ReviewRepairAction::Repair {
+            complete_task(&store, &created.active_review_task_id)?;
+            service.decide(&created.id, &request(ReviewRepairAction::Repair))?
+        } else {
+            created
+        };
+        complete_task(&store, &active.active_review_task_id)?;
+        let stale = store
+            .get_review_repair_loop(&active.id)?
+            .ok_or_else(|| std::io::Error::other("loop missing before decision"))?;
+        assert_eq!(stale.status, ReviewRepairLoopStatus::Running);
+        let winner = service.decide(&active.id, &request(winning_action))?;
+        assert_eq!(winner.status, expected_status);
+        assert_eq!(winner.active_review_task_id, stale.active_review_task_id);
+        let task_count = store.list_tasks(&project.id)?.len();
+
+        let result = service.decide_review(stale, &request(ReviewRepairAction::Accept));
+        if !matches!(
+            &result,
+            Err(SchedulerError::Store(StoreError::ConcurrentReviewRepairLoop(id)))
+                if id == &active.id
+        ) {
+            unexpected_results.push(format!("{winning_action:?}: {result:?}"));
+        }
+        assert_eq!(
+            serde_json::to_value(service.get(&active.id)?)?,
+            serde_json::to_value(winner)?
+        );
+        assert_eq!(store.list_tasks(&project.id)?.len(), task_count);
+    }
+    assert!(
+        unexpected_results.is_empty(),
+        "every stale request must report ConcurrentReviewRepairLoop; actual results:\n{}",
+        unexpected_results.join("\n")
+    );
+    Ok(())
+}
+
+#[test]
 fn failed_task_insert_rolls_back_decision_and_all_generated_tasks() -> Result<(), Box<dyn Error>> {
     let (_directory, store, project) = fixture()?;
     let service = ReviewRepairLoopService::new(store.clone());
