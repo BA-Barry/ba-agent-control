@@ -36,6 +36,7 @@ struct HoldingRuntime {
     events: tokio::sync::broadcast::Sender<RuntimeEvent>,
     launches: Arc<Mutex<Vec<(String, RunRequest)>>>,
     approvals: Arc<Mutex<Vec<(String, String, ApprovalDecision)>>>,
+    fail_approvals: Arc<Mutex<bool>>,
 }
 
 impl HoldingRuntime {
@@ -45,7 +46,15 @@ impl HoldingRuntime {
             events,
             launches: Arc::new(Mutex::new(Vec::new())),
             approvals: Arc::new(Mutex::new(Vec::new())),
+            fail_approvals: Arc::new(Mutex::new(false)),
         }
+    }
+
+    fn with_approval_failure(self) -> Self {
+        if let Ok(mut fail) = self.fail_approvals.lock() {
+            *fail = true;
+        }
+        self
     }
 }
 
@@ -96,6 +105,15 @@ impl RuntimeAdapter for HoldingRuntime {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> Result<(), RuntimeError> {
+        if *self
+            .fail_approvals
+            .lock()
+            .map_err(|_| RuntimeError::Protocol("approval failure flag poisoned".into()))?
+        {
+            return Err(RuntimeError::Protocol(
+                "simulated approval delivery failure".into(),
+            ));
+        }
         self.approvals
             .lock()
             .map_err(|_| RuntimeError::Protocol("approval log poisoned".into()))?
@@ -1955,6 +1973,111 @@ async fn runtime_coordinator_forwards_session_decision_and_recovers_after_reject
                 ApprovalDecision::AcceptForSession,
             ),
         ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_approval_delivery_is_serialized_with_durable_resolution()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    attach_runtime_handle(&fixture)?;
+    let approval = ApprovalCoordinator::new(fixture.store.clone()).request_runtime_operation(
+        &fixture.run_id,
+        "item/commandExecution/requestApproval",
+        "request-concurrent",
+        &json!({"command": ["cargo", "test"]}),
+    )?;
+    let runtime = Arc::new(HoldingRuntime::new());
+    let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
+    let first = control.clone();
+    let second = control.clone();
+    let evidence = json!({"actor": "test"});
+
+    let (left, right) = tokio::join!(
+        first.respond_approval(
+            &approval.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::Accept,
+            &evidence,
+        ),
+        second.respond_approval(
+            &approval.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::Accept,
+            &evidence,
+        ),
+    );
+
+    assert!(left.is_ok() ^ right.is_ok());
+    assert!(matches!(
+        if left.is_err() { left } else { right },
+        Err(SchedulerError::ApprovalAlreadyResolved(_))
+    ));
+    assert_eq!(
+        runtime
+            .approvals
+            .lock()
+            .map_err(|_| missing("approval log poisoned"))?
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_approval(&approval.id)?
+            .ok_or_else(|| missing("approval missing"))?
+            .status,
+        ApprovalStatus::Approved
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_approval_delivery_failure_keeps_the_approval_pending()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = store_fixture(RunStatus::Running)?;
+    attach_runtime_handle(&fixture)?;
+    let approval = ApprovalCoordinator::new(fixture.store.clone()).request_runtime_operation(
+        &fixture.run_id,
+        "item/commandExecution/requestApproval",
+        "request-failure",
+        &json!({"command": ["cargo", "test"]}),
+    )?;
+    let runtime = Arc::new(HoldingRuntime::new().with_approval_failure());
+    let control = RuntimeCoordinator::new(fixture.store.clone(), runtime.clone());
+
+    let result = control
+        .respond_approval(
+            &approval.id,
+            ApprovalResolution::Approve,
+            ApprovalDecision::Accept,
+            &json!({"actor": "test"}),
+        )
+        .await;
+    assert!(matches!(result, Err(SchedulerError::Runtime(_))));
+    assert_eq!(
+        fixture
+            .store
+            .get_approval(&approval.id)?
+            .ok_or_else(|| missing("approval missing"))?
+            .status,
+        ApprovalStatus::Pending
+    );
+    assert_eq!(
+        fixture
+            .store
+            .get_run(&fixture.run_id)?
+            .ok_or_else(|| missing("run missing"))?
+            .status,
+        RunStatus::WaitingApproval
+    );
+    assert!(
+        runtime
+            .approvals
+            .lock()
+            .map_err(|_| missing("approval log poisoned"))?
+            .is_empty()
     );
     Ok(())
 }

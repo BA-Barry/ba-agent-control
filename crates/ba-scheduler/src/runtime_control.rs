@@ -32,6 +32,7 @@ pub struct RuntimeCoordinator {
     worktree_root: Option<PathBuf>,
     managed_mcp_server: Option<StdioMcpServer>,
     drain_lock: Arc<Mutex<()>>,
+    approval_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug)]
@@ -60,6 +61,7 @@ impl RuntimeCoordinator {
             worktree_root: None,
             managed_mcp_server: None,
             drain_lock: Arc::new(Mutex::new(())),
+            approval_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -637,6 +639,11 @@ impl RuntimeCoordinator {
         runtime_decision: ApprovalDecision,
         evidence: &Value,
     ) -> Result<(Approval, RunEvent), SchedulerError> {
+        // Keep the runtime side effect and its durable CAS in one process-wide
+        // critical section. The control descriptor already enforces one
+        // service owner, while the store CAS remains the cross-process safety
+        // boundary for recovery and defensive tests.
+        let _approval_guard = self.approval_lock.lock().await;
         let pending = self
             .store
             .get_approval(approval_id)?
