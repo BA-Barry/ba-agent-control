@@ -62,6 +62,7 @@ test('keeps system-generated operating records localized across every route', as
 
   await user.click(root.getByRole('link', { name: /^Run detail 04$/ }))
   expect(await root.findByRole('heading', { name: 'Run detail', level: 2 })).toBeInTheDocument()
+  expect(root.getByText('Implementer')).toBeInTheDocument()
   expect(root.getByText('Changed-scope tests started')).toBeInTheDocument()
 
   await user.click(root.getByRole('link', { name: /^Approvals 02$/ }))
@@ -85,6 +86,16 @@ test('selects the synthetic QA station from the same station source', async () =
   await user.click(await root.findByRole('button', { name: /QA-011/ }))
   expect(root.getByText('QA-011 · 收据链前向验证')).toBeInTheDocument()
   expect(root.getByText((content) => content.includes('crates/ba-receipt/**'))).toBeInTheDocument()
+})
+
+test('localizes runtime roles and quality task statuses in Chinese', async () => {
+  const user = userEvent.setup()
+  const view = render(<ConsoleApp />)
+  const root = within(view.container)
+  await user.click(await root.findByRole('link', { name: /^运行详情 04$/ }))
+  expect(await root.findByText((content) => content.includes('测试工程师'))).toBeInTheDocument()
+  await user.click(root.getByRole('link', { name: /^质量与收据 06$/ }))
+  expect(root.getByLabelText('检查任务')).toHaveTextContent('运行中')
 })
 
 test('explains demo-only actions instead of presenting inert controls', async () => {
