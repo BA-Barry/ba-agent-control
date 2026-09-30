@@ -46,7 +46,7 @@ This audit maps the approved BA Agent implementation plan to reproducible eviden
 | Detached isolated worktree for writes | Proven locally | Integrated acceptance test creates three distinct worktrees across three repositories; retry tests prove attempt-specific isolation |
 | Overlapping write scopes serialize | Proven locally | Scheduler scope-conflict tests |
 | Gates before local commit and `ba/<workstream>/<task-id>` branch | Proven locally | Scheduler finalize/gate/receipt integration tests |
-| Push, merge, deploy, delete and elevation require approval | Proven locally in tested paths | Approval state tests and 15 Hook guard fixtures; GitHub adapter has no mutation endpoint. Session decisions are restricted to supported command/file-change requests; MCP elicitation, permission elevation and protected operations stay per-call. Concurrent response and interrupted approval delivery need explicit failure-path evidence before a broad safety claim |
+| Push, merge, deploy, delete and elevation require approval | Proven locally in tested paths; process-crash delivery remains bounded | Approval state tests and 15 Hook guard fixtures; GitHub adapter has no mutation endpoint. Session decisions are restricted to supported command/file-change requests; MCP elicitation, permission elevation and protected operations stay per-call. Runtime approval delivery is serialized within the single-owner service, the durable CAS keeps one winner across defensive concurrent responders, and a runtime delivery failure leaves the approval pending. A crash after the runtime accepts a response but before the durable write is still an explicitly unclaimed exactly-once scenario |
 | Crash/orphan recovery and persisted thread resume | Proven locally | Integrated acceptance test reopens SQLite, records an orphaned run, preserves its thread identity and restores it when live |
 
 ### CLI, API, MCP and compatibility
@@ -96,7 +96,7 @@ This deterministic test proves orchestration and persistence without consuming m
 ## Remaining blockers and next actions
 
 1. Execute the already deterministic bounded review/repair path with live Codex turns. Exact upstream-commit selection, isolated read/write worktrees, restart recovery and confirmation are proven locally; this remaining check evaluates real Agent behavior and prompt/tool interaction.
-2. Exercise approval response concurrency and interrupted delivery. Current tests cover sequential duplicate refusal and protocol-specific scope decisions, not exactly-once delivery across a process failure.
+2. Exercise interrupted approval delivery across a real process failure. Same-service concurrency, durable winner selection, and runtime delivery failure are now covered; the remaining evidence must characterize recovery when the runtime accepts a response immediately before the controlling process exits. Until that test exists, do not claim exactly-once approval delivery across a crash.
 3. Confirm the post-pass controls (project onboarding, role dispatch, gates, queue, concurrency, workflow/repair, task history and session approvals) with Narrator and 200% zoom on the exact future release candidate.
 4. Run four-platform certification on that exact release commit; recheck the previously reported GitHub Actions billing restriction before treating it as current.
 5. Obtain separate approval for public repository visibility, a version tag, GitHub Release and public archives.
