@@ -300,15 +300,14 @@ fn blockers_for(
         blockers.push(ScheduleBlocker::ConcurrencyLimit {
             limit: config.max_concurrency,
         });
-    } else if let Some(reservation) = reservation {
-        if let Some(conflict) = reservations
+    } else if let Some(reservation) = reservation
+        && let Some(conflict) = reservations
             .values()
             .find(|running| reservation.conflicts_with(running))
-        {
-            blockers.push(ScheduleBlocker::WriteConflict {
-                running_task_id: conflict.task_id.clone(),
-            });
-        }
+    {
+        blockers.push(ScheduleBlocker::WriteConflict {
+            running_task_id: conflict.task_id.clone(),
+        });
     }
     blockers
 }

@@ -466,12 +466,12 @@ fn validate_instance_milestone(
     project: &Project,
     milestone: Option<&Milestone>,
 ) -> Result<(), SchedulerError> {
-    if let Some(milestone) = milestone {
-        if milestone.project_id != project.id || milestone.workstream_id.is_some() {
-            return Err(invalid_template(
-                "workflow templates can attach only to a project-level milestone in the same project",
-            ));
-        }
+    if let Some(milestone) = milestone
+        && (milestone.project_id != project.id || milestone.workstream_id.is_some())
+    {
+        return Err(invalid_template(
+            "workflow templates can attach only to a project-level milestone in the same project",
+        ));
     }
     Ok(())
 }

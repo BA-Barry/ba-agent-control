@@ -61,7 +61,7 @@ async fn launch(store: &SqliteStore, worktrees: &Path, task: &Task) -> TestResul
     );
     if !task.write {
         assert_eq!(launches[0].1.sandbox, ba_runtime::SandboxMode::ReadOnly);
-        assert!(checkout.write_scope.is_empty());
+        assert_eq!(checkout.write_scope, [] as [String; 0]);
     }
     Ok(bundle)
 }

@@ -213,13 +213,13 @@ async fn claim_control_descriptor(
     descriptor: &ControlDescriptor,
 ) -> anyhow::Result<ControlClaim> {
     if let Ok(source) = fs::read_to_string(path) {
-        if let Ok(existing) = serde_json::from_str::<ControlDescriptor>(&source) {
-            if control_descriptor_is_live(&existing).await {
-                anyhow::bail!(
-                    "another BA Agent control service is already listening at {}",
-                    existing.address
-                );
-            }
+        if let Ok(existing) = serde_json::from_str::<ControlDescriptor>(&source)
+            && control_descriptor_is_live(&existing).await
+        {
+            anyhow::bail!(
+                "another BA Agent control service is already listening at {}",
+                existing.address
+            );
         }
         fs::remove_file(path)?;
     }
@@ -422,14 +422,14 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
                 }
             };
         for record in recovery_records {
-            if matches!(record.action, RecoveryAction::Resume { .. }) {
-                if let Err(error) = control.resume(&record.run_id, None).await {
-                    tracing::warn!(
-                        run_id = %record.run_id,
-                        error = %error,
-                        "automatic runtime recovery remained orphaned"
-                    );
-                }
+            if matches!(record.action, RecoveryAction::Resume { .. })
+                && let Err(error) = control.resume(&record.run_id, None).await
+            {
+                tracing::warn!(
+                    run_id = %record.run_id,
+                    error = %error,
+                    "automatic runtime recovery remained orphaned"
+                );
             }
         }
         if let Err(error) = control.drain_queue().await {

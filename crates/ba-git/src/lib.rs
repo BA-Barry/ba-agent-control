@@ -716,7 +716,7 @@ mod tests {
 
         assert_eq!(finalized.branch, "ba/alpha/01NOOPTEST");
         assert_eq!(finalized.commit, base);
-        assert!(finalized.changed_paths.is_empty());
+        assert_eq!(finalized.changed_paths, [] as [RepoPath; 0]);
         let commit_count = output_text(&run_git(&handle.path, ["rev-list", "--count", "HEAD"])?)?
             .trim()
             .to_owned();

@@ -115,23 +115,38 @@ process.stdout.write(`wrote ${output} and ${noticesOutput} (${rust.length} Rust,
 function run(program, args) {
   let executable = program;
   let executableArgs = args;
+  let windowsVerbatimArguments = false;
   if (process.platform === "win32" && program === "pnpm") {
     const command = findOnPath("pnpm", [".cmd", ".exe", ".bat"]);
     if (!command) throw new Error("pnpm was not found on PATH");
-    executable = process.env.ComSpec ?? "cmd.exe";
-    executableArgs = ["/d", "/s", "/c", command, ...args];
+    if (/\.(?:cmd|bat)$/iu.test(command)) {
+      const commandLine = [command, ...args].map(quoteCmdArgument).join(" ");
+      executable = process.env.ComSpec ?? "cmd.exe";
+      executableArgs = ["/d", "/v:off", "/s", "/c", `"${commandLine}"`];
+      windowsVerbatimArguments = true;
+    } else {
+      executable = command;
+    }
   }
   const result = spawnSync(executable, executableArgs, {
     cwd: process.cwd(),
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
     shell: false,
+    windowsVerbatimArguments,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`${program} ${args.join(" ")} failed:\n${result.stderr}`);
   }
   return result.stdout;
+}
+
+function quoteCmdArgument(value) {
+  if (/["%\r\n]/u.test(value)) {
+    throw new Error("pnpm command arguments contain unsupported cmd.exe expansion characters");
+  }
+  return `"${value}"`;
 }
 
 function findOnPath(program, extensions) {

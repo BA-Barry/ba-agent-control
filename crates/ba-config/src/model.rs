@@ -267,16 +267,16 @@ impl ProjectConfig {
                     });
                 }
             }
-            if let Some(value) = role.sandbox_mode.as_deref() {
-                if !matches!(
+            if let Some(value) = role.sandbox_mode.as_deref()
+                && !matches!(
                     value,
                     "read-only" | "workspace-write" | "danger-full-access"
-                ) {
-                    return Err(ConfigError::InvalidSandboxMode {
-                        role: role.id.clone(),
-                        value: value.to_owned(),
-                    });
-                }
+                )
+            {
+                return Err(ConfigError::InvalidSandboxMode {
+                    role: role.id.clone(),
+                    value: value.to_owned(),
+                });
             }
         }
         for skill in &self.skills {

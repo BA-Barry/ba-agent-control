@@ -131,8 +131,8 @@ THE SOFTWARE.
 SHA-256: 05fa1ba3228aab8d2bf637f286d7579ed76256c1dab3fa955c2489b920ffeb35
 Packages:
 - Rust:quinn@0.11.11 (LICENSE-MIT)
-- Rust:quinn-proto@0.11.17 (LICENSE-MIT)
-- Rust:quinn-udp@0.5.15 (LICENSE-MIT)
+- Rust:quinn-proto@0.11.19 (LICENSE-MIT)
+- Rust:quinn-udp@0.5.16 (LICENSE-MIT)
 --------------------------------------------------------------------------------
 Copyright (c) 2018 The quinn Developers
 
@@ -1426,8 +1426,8 @@ SHA-256: 283ea6cc2997a1a70da0049e09adf9317bb60ca1b51279b65196b83a69e1996b
 Packages:
 - Rust:lru-slab@0.1.2 (LICENSE-APACHE)
 - Rust:quinn@0.11.11 (LICENSE-APACHE)
-- Rust:quinn-proto@0.11.17 (LICENSE-APACHE)
-- Rust:quinn-udp@0.5.15 (LICENSE-APACHE)
+- Rust:quinn-proto@0.11.19 (LICENSE-APACHE)
+- Rust:quinn-udp@0.5.16 (LICENSE-APACHE)
 - Rust:static_assertions@1.1.0 (LICENSE-APACHE)
 - Rust:tinyvec@1.12.0 (LICENSE-APACHE.md)
 - Rust:utf8_iter@1.0.4 (LICENSE-APACHE)
@@ -1696,7 +1696,7 @@ SOFTWARE.
 ================================================================================
 SHA-256: 2bd8a2c61751fc47dcd214f864b6fcdbcb518995fbf497c81a06c3bfe8d1d9d4
 Packages:
-- npm:seroval@1.6.3 (LICENSE)
+- npm:seroval@1.8.2 (LICENSE)
 - npm:seroval-plugins@1.6.3 (LICENSE)
 --------------------------------------------------------------------------------
 MIT License Copyright (c) 2025 Alexis Munsayac <alexis.munsayac@gmail.com>
@@ -2087,7 +2087,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ================================================================================
 SHA-256: 3ac27594ed56fd079c95a71f8beabc498c5b997ec31e91f4a18e59a5974adb2a
 Packages:
-- Rust:rustls-webpki@0.103.15 (LICENSE)
+- Rust:rustls-webpki@0.103.16 (LICENSE)
 --------------------------------------------------------------------------------
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -2159,7 +2159,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ================================================================================
 SHA-256: 3e1bef82aa0dfee4504ad211f7e4895153e3191db6ab179f94a7e20f990a0b67
 Packages:
-- Rust:tokio@1.53.1 (LICENSE)
+- Rust:tokio@1.53.3 (LICENSE)
 - Rust:tokio-stream@0.1.19 (LICENSE)
 - Rust:tokio-util@0.7.19 (LICENSE)
 --------------------------------------------------------------------------------
@@ -3556,8 +3556,8 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 SHA-256: 6061b8ea5b16d94a796c9837aadc73a8e72a11b3045c98d3a0712d2a0fef84ac
 Packages:
-- Rust:libsqlite3-sys@0.35.0 (LICENSE)
-- Rust:rusqlite@0.37.0 (LICENSE)
+- Rust:libsqlite3-sys@0.39.1 (LICENSE)
+- Rust:rusqlite@0.41.1 (LICENSE)
 --------------------------------------------------------------------------------
 Copyright (c) 2014 The rusqlite developers
 
@@ -4843,9 +4843,12 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 SHA-256: 783829b43aacb86cb8e6cedcd777210c13f2081aae94419cc7a30e112977d488
 Packages:
 - Rust:windows-link@0.2.1 (license-apache-2.0)
+- Rust:windows-sys@0.59.0 (license-apache-2.0)
 - Rust:windows-sys@0.60.2 (license-apache-2.0)
 - Rust:windows-sys@0.61.2 (license-apache-2.0)
+- Rust:windows-targets@0.52.6 (license-apache-2.0)
 - Rust:windows-targets@0.53.5 (license-apache-2.0)
+- Rust:windows_x86_64_msvc@0.52.6 (license-apache-2.0)
 - Rust:windows_x86_64_msvc@0.53.1 (license-apache-2.0)
 --------------------------------------------------------------------------------
 Apache License
@@ -5531,7 +5534,7 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 SHA-256: 7e1b38c60796dd9949d6f26bd124e353a4a709b70e90810e2608f30195454da0
 Packages:
-- Rust:hashlink@0.10.0 (LICENSE-APACHE)
+- Rust:hashlink@0.12.2 (LICENSE-APACHE)
 --------------------------------------------------------------------------------
 Apache License
                         Version 2.0, January 2004
@@ -6836,7 +6839,6 @@ Packages:
 - Rust:flate2@1.1.9 (LICENSE-APACHE)
 - Rust:fnv@1.0.7 (LICENSE-APACHE)
 - Rust:form_urlencoded@1.2.2 (LICENSE-APACHE)
-- Rust:hashbrown@0.15.5 (LICENSE-APACHE)
 - Rust:hashbrown@0.17.1 (LICENSE-APACHE)
 - Rust:heck@0.5.0 (LICENSE-APACHE)
 - Rust:httparse@1.10.1 (LICENSE-APACHE)
@@ -6865,7 +6867,7 @@ Packages:
 - Rust:pkg-config@0.3.34 (LICENSE-APACHE)
 - Rust:regex-automata@0.4.18 (LICENSE-APACHE)
 - Rust:regex-syntax@0.8.11 (LICENSE-APACHE)
-- Rust:rustls@0.23.43 (LICENSE-APACHE)
+- Rust:rustls@0.23.46 (LICENSE-APACHE)
 - Rust:scopeguard@1.2.0 (LICENSE-APACHE)
 - Rust:secret-service@4.0.0 (LICENSE-APACHE)
 - Rust:security-framework@3.7.0 (LICENSE-APACHE)
@@ -7802,7 +7804,7 @@ THE SOFTWARE.
 SHA-256: a3320aa8d192a02cc2c9f31ebcceb861d71b737acdff1397d0d8a49361e86e73
 Packages:
 - Rust:hyper-rustls@0.27.9 (LICENSE-MIT)
-- Rust:rustls@0.23.43 (LICENSE-MIT)
+- Rust:rustls@0.23.46 (LICENSE-MIT)
 --------------------------------------------------------------------------------
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 
@@ -8375,7 +8377,6 @@ SOFTWARE.
 ================================================================================
 SHA-256: ae9791f02f2bbe0ce17b434753af97be6e5284b6f8e9f22db3c1f0f11b2e015a
 Packages:
-- Rust:hashbrown@0.15.5 (LICENSE-MIT)
 - Rust:hashbrown@0.17.1 (LICENSE-MIT)
 --------------------------------------------------------------------------------
 Copyright (c) 2016 Amanieu d'Antras
@@ -8408,7 +8409,7 @@ DEALINGS IN THE SOFTWARE.
 SHA-256: af6da3f3f6b4929e02f81fd890835fd6d70ffddae12a8d735c0d7f294ac5ffd7
 Packages:
 - Rust:hyper-rustls@0.27.9 (LICENSE-ISC)
-- Rust:rustls@0.23.43 (LICENSE-ISC)
+- Rust:rustls@0.23.46 (LICENSE-ISC)
 --------------------------------------------------------------------------------
 ISC License (ISC)
 Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>
@@ -8457,7 +8458,7 @@ SOFTWARE.
 ================================================================================
 SHA-256: b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744
 Packages:
-- Rust:foldhash@0.1.5 (LICENSE)
+- Rust:foldhash@0.2.0 (LICENSE)
 --------------------------------------------------------------------------------
 Copyright (c) 2024 Orson Peters
 
@@ -9446,7 +9447,7 @@ SOFTWARE.
 ================================================================================
 SHA-256: d30183ec6610abca89d6095d5f1dc56ea50248a1001cbb4549fadc3a582f6f9a
 Packages:
-- Rust:webpki-roots@1.0.9 (LICENSE)
+- Rust:webpki-roots@1.0.10 (LICENSE)
 --------------------------------------------------------------------------------
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -10244,7 +10245,7 @@ limitations under the License.
 ================================================================================
 SHA-256: e915669a595b11a200873df8286561881b0e04932f6412a585db6297ba0bc97c
 Packages:
-- Rust:hashlink@0.10.0 (LICENSE-MIT)
+- Rust:hashlink@0.12.2 (LICENSE-MIT)
 --------------------------------------------------------------------------------
 This work is derived in part from the `linked-hash-map` crate, Copyright (c)
 2015 The Rust Project Developers
@@ -11567,9 +11568,12 @@ END OF TERMS AND CONDITIONS
 SHA-256: ff82c90f84945c60601e96b43246009b9bc589f3ebe1cd8a0fd39a3520d8c310
 Packages:
 - Rust:windows-link@0.2.1 (license-mit)
+- Rust:windows-sys@0.59.0 (license-mit)
 - Rust:windows-sys@0.60.2 (license-mit)
 - Rust:windows-sys@0.61.2 (license-mit)
+- Rust:windows-targets@0.52.6 (license-mit)
 - Rust:windows-targets@0.53.5 (license-mit)
+- Rust:windows_x86_64_msvc@0.52.6 (license-mit)
 - Rust:windows_x86_64_msvc@0.53.1 (license-mit)
 - npm:@types/react@19.2.18 (LICENSE)
 - npm:@types/react-dom@19.2.4 (LICENSE)

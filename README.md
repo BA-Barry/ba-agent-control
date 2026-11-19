@@ -27,7 +27,7 @@ The console follows the approved comp-first “测量员外业簿” direction a
 
 ## Quick start
 
-Prerequisites: Rust stable, Node.js 24, pnpm 11.19.0, Git, and Codex CLI 0.130.0+ already authenticated.
+Prerequisites: Rust stable (1.89 or newer), Node.js 24, pnpm 11.19.0, Git, and Codex CLI 0.130.0+ already authenticated.
 
 ```powershell
 git clone https://github.com/BA-Barry/ba-agent-control.git

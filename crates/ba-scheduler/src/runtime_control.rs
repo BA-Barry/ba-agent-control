@@ -160,24 +160,24 @@ impl RuntimeCoordinator {
             .map(|id| self.store.get_agent_profile(id))
             .transpose()?
             .flatten();
-        if bundle.worktree.is_none() {
-            if let Some(worktree_root) = &self.worktree_root {
-                bundle.worktree =
-                    match DispatchCoordinator::new(self.store.clone(), worktree_root.clone())
-                        .activate_worktree(&task, &bundle.run.id)
-                    {
-                        Ok(worktree) => worktree,
-                        Err(error) => {
-                            self.finish_run(
-                                &bundle.run.id,
-                                RunStatus::Failed,
-                                "worktree.create_failed",
-                                json!({"error": error.to_string()}),
-                            )?;
-                            return Err(error);
-                        }
-                    };
-            }
+        if bundle.worktree.is_none()
+            && let Some(worktree_root) = &self.worktree_root
+        {
+            bundle.worktree =
+                match DispatchCoordinator::new(self.store.clone(), worktree_root.clone())
+                    .activate_worktree(&task, &bundle.run.id)
+                {
+                    Ok(worktree) => worktree,
+                    Err(error) => {
+                        self.finish_run(
+                            &bundle.run.id,
+                            RunStatus::Failed,
+                            "worktree.create_failed",
+                            json!({"error": error.to_string()}),
+                        )?;
+                        return Err(error);
+                    }
+                };
         }
         let cwd = bundle.worktree.as_ref().map_or_else(
             || PathBuf::from(&project.root_path),
@@ -858,15 +858,15 @@ fn compose_task_prompt(task: &Task, profile: Option<&AgentProfile>) -> String {
     } else {
         sections.push("本任务为只读任务，不得修改仓库文件。".into());
     }
-    if let Some(profile) = profile {
-        if !profile.instructions.trim().is_empty() {
-            sections.push(format!(
-                "角色：{} / {}\n{}",
-                profile.name,
-                profile.role,
-                profile.instructions.trim()
-            ));
-        }
+    if let Some(profile) = profile
+        && !profile.instructions.trim().is_empty()
+    {
+        sections.push(format!(
+            "角色：{} / {}\n{}",
+            profile.name,
+            profile.role,
+            profile.instructions.trim()
+        ));
     }
     sections.push("完成任务并提供可验证证据；遇到需要人工许可的操作时发起审批。".into());
     sections.join("\n\n")

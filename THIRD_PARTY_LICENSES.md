@@ -6,7 +6,7 @@ Rust target union: `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `x86_64
 
 This inventory records package license expressions and upstream references. Before Public Beta, release review must verify every expression and include any license or notice text required by the corresponding terms.
 
-## Rust runtime packages (273)
+## Rust runtime packages (275)
 
 | Package | Version | License | Upstream |
 | --- | --- | --- | --- |
@@ -72,7 +72,7 @@ This inventory records package license expressions and upstream references. Befo
 | find-msvc-tools | 0.1.11 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/cc-rs) |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/flate2-rs) |
 | fnv | 1.0.7 | Apache-2.0 / MIT | [source](https://github.com/servo/rust-fnv) |
-| foldhash | 0.1.5 | Zlib | [source](https://github.com/orlp/foldhash) |
+| foldhash | 0.2.0 | Zlib | [source](https://github.com/orlp/foldhash) |
 | foreign-types | 0.3.2 | MIT/Apache-2.0 | [source](https://github.com/sfackler/foreign-types) |
 | foreign-types-shared | 0.1.1 | MIT/Apache-2.0 | [source](https://github.com/sfackler/foreign-types) |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | [source](https://github.com/servo/rust-url) |
@@ -87,9 +87,8 @@ This inventory records package license expressions and upstream references. Befo
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | [source](https://github.com/rust-random/getrandom) |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | [source](https://github.com/rust-random/getrandom) |
 | h2 | 0.4.18 | MIT | [source](https://github.com/hyperium/h2) |
-| hashbrown | 0.15.5 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/hashbrown) |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/hashbrown) |
-| hashlink | 0.10.0 | MIT OR Apache-2.0 | [source](https://github.com/kyren/hashlink) |
+| hashlink | 0.12.2 | MIT OR Apache-2.0 | [source](https://github.com/djc/hashlink) |
 | heck | 0.5.0 | MIT OR Apache-2.0 | [source](https://github.com/withoutboats/heck) |
 | hex | 0.4.3 | MIT OR Apache-2.0 | [source](https://github.com/KokaKiwi/rust-hex) |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 | [source](https://github.com/RustCrypto/KDFs/) |
@@ -122,7 +121,7 @@ This inventory records package license expressions and upstream references. Befo
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang-nursery/lazy-static.rs) |
 | libc | 0.2.189 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/libc) |
 | libdbus-sys | 0.2.7 | Apache-2.0/MIT | [source](https://github.com/diwic/dbus-rs) |
-| libsqlite3-sys | 0.35.0 | MIT | [source](https://github.com/rusqlite/rusqlite) |
+| libsqlite3-sys | 0.39.1 | MIT | [source](https://github.com/rusqlite/rusqlite) |
 | litemap | 0.8.3 | Unicode-3.0 | [source](https://github.com/unicode-org/icu4x) |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | [source](https://github.com/Amanieu/parking_lot) |
 | log | 0.4.34 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/log) |
@@ -163,8 +162,8 @@ This inventory records package license expressions and upstream references. Befo
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 | [source](https://github.com/bkchr/proc-macro-crate) |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | [source](https://github.com/dtolnay/proc-macro2) |
 | quinn | 0.11.11 | MIT OR Apache-2.0 | [source](https://github.com/quinn-rs/quinn) |
-| quinn-proto | 0.11.17 | MIT OR Apache-2.0 | [source](https://github.com/quinn-rs/quinn) |
-| quinn-udp | 0.5.15 | MIT OR Apache-2.0 | [source](https://github.com/quinn-rs/quinn) |
+| quinn-proto | 0.11.19 | MIT OR Apache-2.0 | [source](https://github.com/quinn-rs/quinn) |
+| quinn-udp | 0.5.16 | MIT OR Apache-2.0 | [source](https://github.com/quinn-rs/quinn) |
 | quote | 1.0.47 | MIT OR Apache-2.0 | [source](https://github.com/dtolnay/quote) |
 | rand | 0.10.2 | MIT OR Apache-2.0 | [source](https://github.com/rust-random/rand) |
 | rand | 0.8.7 | MIT OR Apache-2.0 | [source](https://github.com/rust-random/rand) |
@@ -179,11 +178,11 @@ This inventory records package license expressions and upstream references. Befo
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | [source](https://github.com/rust-lang/regex) |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | [source](https://github.com/seanmonstar/reqwest) |
 | ring | 0.17.14 | Apache-2.0 AND ISC | [source](https://github.com/briansmith/ring) |
-| rusqlite | 0.37.0 | MIT | [source](https://github.com/rusqlite/rusqlite) |
+| rusqlite | 0.41.1 | MIT | [source](https://github.com/rusqlite/rusqlite) |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | [source](https://github.com/rust-lang/rustc-hash) |
-| rustls | 0.23.43 | Apache-2.0 OR ISC OR MIT | [source](https://github.com/rustls/rustls) |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | [source](https://github.com/rustls/rustls) |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | [source](https://github.com/rustls/pki-types) |
-| rustls-webpki | 0.103.15 | ISC | [source](https://github.com/rustls/webpki) |
+| rustls-webpki | 0.103.16 | ISC | [source](https://github.com/rustls/webpki) |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | [source](https://github.com/dtolnay/ryu) |
 | same-file | 1.0.6 | Unlicense/MIT | [source](https://github.com/BurntSushi/same-file) |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 | [source](https://github.com/bluss/scopeguard) |
@@ -221,7 +220,7 @@ This inventory records package license expressions and upstream references. Befo
 | tinystr | 0.8.4 | Unicode-3.0 | [source](https://github.com/unicode-org/icu4x) |
 | tinyvec | 1.12.0 | Zlib OR Apache-2.0 OR MIT | [source](https://github.com/Lokathor/tinyvec) |
 | tinyvec_macros | 0.1.1 | MIT OR Apache-2.0 OR Zlib | [source](https://github.com/Soveu/tinyvec_macros) |
-| tokio | 1.53.1 | MIT | [source](https://github.com/tokio-rs/tokio) |
+| tokio | 1.53.3 | MIT | [source](https://github.com/tokio-rs/tokio) |
 | tokio-macros | 2.7.2 | MIT | [source](https://github.com/tokio-rs/tokio) |
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 | [source](https://github.com/rustls/tokio-rustls) |
 | tokio-stream | 0.1.19 | MIT | [source](https://github.com/tokio-rs/tokio) |
@@ -255,12 +254,15 @@ This inventory records package license expressions and upstream references. Befo
 | version_check | 0.9.5 | MIT/Apache-2.0 | [source](https://github.com/SergioBenitez/version_check) |
 | walkdir | 2.5.0 | Unlicense/MIT | [source](https://github.com/BurntSushi/walkdir) |
 | want | 0.3.1 | MIT | [source](https://github.com/seanmonstar/want) |
-| webpki-roots | 1.0.9 | CDLA-Permissive-2.0 | [source](https://github.com/rustls/webpki-roots) |
+| webpki-roots | 1.0.10 | CDLA-Permissive-2.0 | [source](https://github.com/rustls/webpki-roots) |
 | winapi-util | 0.1.11 | Unlicense OR MIT | [source](https://github.com/BurntSushi/winapi-util) |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
+| windows-sys | 0.59.0 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
+| windows-targets | 0.52.6 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
+| windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 | [source](https://github.com/microsoft/windows-rs) |
 | winnow | 0.7.15 | MIT | [source](https://github.com/winnow-rs/winnow) |
 | winnow | 1.0.4 | MIT | [source](https://github.com/winnow-rs/winnow) |
@@ -324,6 +326,6 @@ This inventory records package license expressions and upstream references. Befo
 | react | 19.2.8 | MIT | [source](https://react.dev/) |
 | react-dom | 19.2.8 | MIT | [source](https://react.dev/) |
 | scheduler | 0.27.0 | MIT | [source](https://react.dev/) |
-| seroval | 1.6.3 | MIT | [source](https://github.com/lxsmnsyc/seroval/tree/main/packages/seroval) |
+| seroval | 1.8.2 | MIT | [source](https://seroval.vercel.app) |
 | seroval-plugins | 1.6.3 | MIT | [source](https://github.com/lxsmnsyc/seroval/tree/main/packages/plugins) |
 | use-sync-external-store | 1.6.0 | MIT | [source](https://github.com/facebook/react#readme) |

@@ -642,14 +642,14 @@ fn validate_runtime_snapshot(snapshot: &RuntimeStateSnapshot) -> anyhow::Result<
         if !run_ids.insert(run.external_id.as_str()) {
             bail!("duplicate external run id: {}", run.external_id);
         }
-        if let Some(task_external_id) = &run.task_external_id {
-            if !task_ids.contains(task_external_id.as_str()) {
-                bail!(
-                    "external run {} references unknown task {}",
-                    run.external_id,
-                    task_external_id
-                );
-            }
+        if let Some(task_external_id) = &run.task_external_id
+            && !task_ids.contains(task_external_id.as_str())
+        {
+            bail!(
+                "external run {} references unknown task {}",
+                run.external_id,
+                task_external_id
+            );
         }
         RunStatus::from_str(&run.status)?;
     }

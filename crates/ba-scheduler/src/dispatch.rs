@@ -68,12 +68,12 @@ impl DispatchCoordinator {
         let agent_profile_id = agent_profile_id
             .cloned()
             .or_else(|| task.agent_profile_id.clone());
-        if let Some(profile_id) = &agent_profile_id {
-            if self.store.get_agent_profile(profile_id)?.is_none() {
-                return Err(SchedulerError::NotSchedulable(format!(
-                    "agent profile {profile_id} does not exist"
-                )));
-            }
+        if let Some(profile_id) = &agent_profile_id
+            && self.store.get_agent_profile(profile_id)?.is_none()
+        {
+            return Err(SchedulerError::NotSchedulable(format!(
+                "agent profile {profile_id} does not exist"
+            )));
         }
         if task.status == TaskStatus::Draft {
             task = self.store.transition_task(task_id, TaskStatus::Ready)?;

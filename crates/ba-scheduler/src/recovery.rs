@@ -66,10 +66,10 @@ impl RecoveryCoordinator {
                 if run.status == RunStatus::Orphaned {
                     self.store.transition_run(&run.id, RunStatus::Running)?;
                     self.store.update_dispatch_status(&run.id, "running")?;
-                    if let Some(task) = self.store.get_task(&run.task_id)? {
-                        if task.status == TaskStatus::Blocked {
-                            self.store.transition_task(&task.id, TaskStatus::Running)?;
-                        }
+                    if let Some(task) = self.store.get_task(&run.task_id)?
+                        && task.status == TaskStatus::Blocked
+                    {
+                        self.store.transition_task(&task.id, TaskStatus::Running)?;
                     }
                 }
                 records.push(RecoveryRecord {
@@ -85,16 +85,16 @@ impl RecoveryCoordinator {
             }
             self.store.update_dispatch_status(&run.id, "orphaned")?;
             self.cancel_pending_approvals(&run)?;
-            if let Some(task) = self.store.get_task(&run.task_id)? {
-                if matches!(
+            if let Some(task) = self.store.get_task(&run.task_id)?
+                && matches!(
                     task.status,
                     TaskStatus::Ready
                         | TaskStatus::Queued
                         | TaskStatus::Running
                         | TaskStatus::Review
-                ) {
-                    self.store.transition_task(&task.id, TaskStatus::Blocked)?;
-                }
+                )
+            {
+                self.store.transition_task(&task.id, TaskStatus::Blocked)?;
             }
             let action = recovery_action(&run, capabilities);
             if previous_status != RunStatus::Orphaned {
@@ -133,16 +133,16 @@ impl RecoveryCoordinator {
 }
 
 fn recovery_action(run: &Run, capabilities: &RuntimeCapabilities) -> RecoveryAction {
-    if capabilities.available && capabilities.resume {
-        if let Some(thread_id) = run
+    if capabilities.available
+        && capabilities.resume
+        && let Some(thread_id) = run
             .runtime_thread_id
             .as_ref()
             .filter(|thread_id| !thread_id.trim().is_empty())
-        {
-            return RecoveryAction::Resume {
-                thread_id: thread_id.clone(),
-            };
-        }
+    {
+        return RecoveryAction::Resume {
+            thread_id: thread_id.clone(),
+        };
     }
     RecoveryAction::RetryTask
 }

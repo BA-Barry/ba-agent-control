@@ -2,6 +2,15 @@
 
 This backlog records product gaps observed during the personal Alpha acceptance and first-use walkthrough. It is intentionally outcome-oriented: entries describe a user-visible failure or missing capability rather than creating new release gates.
 
+## Dependency maintenance follow-up (2026-11-20)
+
+The public-repository CI repair upgraded the packages behind 13 vulnerability advisories and the fixable `rustix`/`tokio` soundness warnings. `cargo audit` now reports zero vulnerabilities and zero soundness warnings. Four unmaintained-package notices remain visible; none has a patched version that can be selected as a simple update:
+
+- Replace `chrono` with a maintained time library after checking UTC/RFC3339 serialization and existing SQLite/receipt compatibility ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)).
+- Review the Linux credential-store dependency path before migrating `zbus_names`, `zvariant`, and `zvariant_derive` to the maintained D-Bus stack. Preserve no-credential operation and OS keyring behavior ([RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html), [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html), [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html)).
+
+These notices are not suppressed. Existing vulnerability auditing remains active; a broader time/keyring migration is a follow-up rather than an additional release gate.
+
 ## Iteration progress: project onboarding
 
 **Progress (2026-08-30): complete locally.** The Projects surface now distinguishes importing an existing Git root from creating a new local repository. Both paths use one application service across the console, CLI, REST API, and MCP. Existing project configuration is preserved during import; create mode refuses non-empty directories and rolls back only its own artifacts on failure. The flow explicitly stops at local registration and does not create a GitHub repository, remote, push, tag, or release.

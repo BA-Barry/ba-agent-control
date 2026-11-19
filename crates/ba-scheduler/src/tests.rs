@@ -294,7 +294,10 @@ fn workflow_templates_instantiate_assigned_atomic_task_graphs()
     let service = WorkflowTemplateService::new(store.clone());
     let catalog = service.catalog(&project.id)?;
     assert_eq!(catalog.templates.len(), 6);
-    assert!(catalog.diagnostics.is_empty());
+    assert_eq!(
+        catalog.diagnostics,
+        [] as [crate::WorkflowTemplateDiagnostic; 0]
+    );
     assert!(
         catalog
             .templates
@@ -1021,7 +1024,7 @@ async fn passed_configured_gates_finalize_clean_writer_at_its_verified_revision(
         .as_ref()
         .ok_or_else(|| missing("clean writer Git result missing"))?;
     assert_eq!(git.commit, base_revision);
-    assert!(git.changed_paths.is_empty());
+    assert_eq!(git.changed_paths, [] as [ba_git::RepoPath; 0]);
     assert_eq!(finalized.receipt.kind, "quality_gated_noop_write");
     assert_eq!(
         finalized.receipt.payload["commit"].as_str(),

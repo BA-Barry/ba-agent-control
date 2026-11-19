@@ -260,23 +260,19 @@ impl GitHubAdapter {
             return self.view_repository_with_gh(&path, repository).await;
         }
 
-        if let Ok(Some(token)) = self.read_os_token().await {
-            if self.verify_token(&token).await.is_ok() {
-                return self
-                    .view_repository_with_api(
-                        repository,
-                        &token,
-                        GitHubAuthSource::OsCredentialStore,
-                    )
-                    .await;
-            }
+        if let Ok(Some(token)) = self.read_os_token().await
+            && self.verify_token(&token).await.is_ok()
+        {
+            return self
+                .view_repository_with_api(repository, &token, GitHubAuthSource::OsCredentialStore)
+                .await;
         }
-        if let Some(token) = self.credentials.environment_token() {
-            if self.verify_token(&token).await.is_ok() {
-                return self
-                    .view_repository_with_api(repository, &token, GitHubAuthSource::Environment)
-                    .await;
-            }
+        if let Some(token) = self.credentials.environment_token()
+            && self.verify_token(&token).await.is_ok()
+        {
+            return self
+                .view_repository_with_api(repository, &token, GitHubAuthSource::Environment)
+                .await;
         }
         Err(GitHubError::AuthenticationUnavailable)
     }
