@@ -18,7 +18,7 @@ version = "0.1.0-alpha.1"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["BA Agent contributors"]
-repository = "https://github.com/ba-agent-control/ba-agent-control"
+repository = "https://github.com/BA-Barry/ba-agent-control"
 rust-version = "1.85"
 
 [workspace.dependencies]

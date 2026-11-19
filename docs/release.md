@@ -19,6 +19,8 @@ The workflow also gates the matrix on RustSec and production npm high-severity a
 
 ## Certified private candidate
 
+The historical Actions links below belong to the previous private verification repository. They may require access to that repository and are not runs from the public `BA-Barry/ba-agent-control` repository.
+
 [Run 33161059914](https://github.com/BA-Lau/ba-agent-control/actions/runs/33161059914) completed successfully for commit `74a01754d768bd6789a0315b0ebbaa6b568d18b8`. Each platform passed 44 functional/accessibility browser scenarios, two isolated Web Vitals scenarios, strict Clippy, all-feature workspace tests, release packaging, performance budgets, malicious-package rejection, install, upgrade, rollback, uninstall and SQLite data retention. This candidate includes the three-theme forced-colors plus 200% text regression, the Signal Room active-navigation correction, the user-approved simplified Field Book label, and the non-yanked `chacha20` lockfile refresh. Interface colors and structures are unchanged.
 
 | Target | Inner release archive SHA-256 | Core cold start | API p95 | Idle memory |

@@ -2,7 +2,9 @@
 
 BA Agent (`ba-agent-control`) is a local-first control plane for coordinating auditable AI-assisted development across multiple Git projects. It reuses your authenticated Codex CLI, isolates write tasks in worktrees, pauses risky operations for approval, and stores permanent hash-chained quality receipts.
 
-> Status: the personal Alpha feature set, three-workflow self-hosting acceptance, hosted CI, private four-platform release-candidate certification, release-owner technical license sign-off, and manual accessibility acceptance are complete. No tag, GitHub Release, or public archive has been published.
+Source repository: [BA-Barry/ba-agent-control](https://github.com/BA-Barry/ba-agent-control).
+
+> Status: personal Alpha. Historical validation includes three consecutive self-hosted workflows, hosted CI, private four-platform candidate checks, technical license sign-off, and manual accessibility acceptance for the inspected candidate. Later changes still require the live-model repair-loop check, interrupted-approval recovery check, manual accessibility recheck, and exact-commit four-platform certification listed in the [completion audit](docs/completion-audit.md). Public source hosting does not certify a new release; no version tag, GitHub Release, or binary release archive has been published.
 
 ## What works in this Alpha
 
@@ -28,6 +30,8 @@ The console follows the approved comp-first “测量员外业簿” direction a
 Prerequisites: Rust stable, Node.js 24, pnpm 11.19.0, Git, and Codex CLI 0.130.0+ already authenticated.
 
 ```powershell
+git clone https://github.com/BA-Barry/ba-agent-control.git
+cd ba-agent-control
 pnpm install --frozen-lockfile
 pnpm build
 cargo run -p ba-agent-control -- doctor

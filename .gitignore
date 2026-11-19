@@ -1,4 +1,8 @@
 /target/
+/.tmp/
+/tmp/
+# Owner-specific machine inventories and handover exports stay local.
+/docs/reports/
 /.check/
 **/.check/
 /node_modules/
